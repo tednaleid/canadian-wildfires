@@ -1,24 +1,24 @@
 #!/bin/bash
 
-# ABOUTME: Flexible script to generate wildfire maps for a range of consecutive days
-# ABOUTME: Usage: ./generate_maps.sh START_DATE NUM_DAYS [OUTPUT_DIR]
+# ABOUTME: Flexible script to generate wildfire maps for a date range
+# ABOUTME: Usage: ./generate_maps.sh START_DATE END_DATE [OUTPUT_DIR]
 
 set -e  # Exit on any error
 
 # Function to show usage
 usage() {
-    echo "Usage: $0 START_DATE NUM_DAYS [OUTPUT_DIR]"
+    echo "Usage: $0 START_DATE END_DATE [OUTPUT_DIR]"
     echo ""
     echo "Arguments:"
     echo "  START_DATE   Starting date in YYYY-MM-DD format (e.g., 2025-04-01)"
-    echo "  NUM_DAYS     Number of consecutive days to generate maps for"
+    echo "  END_DATE     Ending date in YYYY-MM-DD format (e.g., 2025-08-04)"
     echo "  OUTPUT_DIR   Optional output directory (default: current directory)"
     echo ""
     echo "Examples:"
-    echo "  $0 2025-04-01 126                    # April 1 - Aug 4 (126 days)"
-    echo "  $0 2025-08-01 7                     # One week starting Aug 1"
-    echo "  $0 2025-04-01 126 2025              # Save to 2025/ directory"
-    echo "  $0 2025-07-01 31 july_maps          # July 2025 in july_maps/ directory"
+    echo "  $0 2025-04-01 2025-08-04                # April 1 through Aug 4"
+    echo "  $0 2025-08-01 2025-08-07                # One week in August"
+    echo "  $0 2025-04-01 2025-08-04 2025           # Save to 2025/ directory"
+    echo "  $0 2025-07-01 2025-07-31 july_maps     # July 2025 in july_maps/ directory"
     exit 1
 }
 
@@ -28,28 +28,38 @@ if [ $# -lt 2 ] || [ $# -gt 3 ]; then
 fi
 
 START_DATE="$1"
-NUM_DAYS="$2"
+END_DATE="$2"
 OUTPUT_DIR="${3:-.}"  # Default to current directory if not specified
 
-# Validate start date format (works on both macOS and Linux)
+# Validate start date format
 if [[ ! "$START_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    echo "Error: Invalid date format '$START_DATE'. Use YYYY-MM-DD format."
+    echo "Error: Invalid start date format '$START_DATE'. Use YYYY-MM-DD format."
     exit 1
 fi
 
-# Validate number of days
-if ! [[ "$NUM_DAYS" =~ ^[0-9]+$ ]] || [ "$NUM_DAYS" -lt 1 ]; then
-    echo "Error: NUM_DAYS must be a positive integer, got '$NUM_DAYS'"
+# Validate end date format
+if [[ ! "$END_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    echo "Error: Invalid end date format '$END_DATE'. Use YYYY-MM-DD format."
     exit 1
 fi
+
+# Convert dates to seconds since epoch for comparison (macOS compatible)
+start_epoch=$(date -j -f "%Y-%m-%d" "$START_DATE" "+%s")
+end_epoch=$(date -j -f "%Y-%m-%d" "$END_DATE" "+%s")
+
+# Validate that end date is after start date
+if [ "$end_epoch" -lt "$start_epoch" ]; then
+    echo "Error: End date '$END_DATE' must be after start date '$START_DATE'."
+    exit 1
+fi
+
+# Calculate number of days (inclusive)
+NUM_DAYS=$(( (end_epoch - start_epoch) / 86400 + 1 ))
 
 # Create output directory if it doesn't exist
 if [ "$OUTPUT_DIR" != "." ]; then
     mkdir -p "$OUTPUT_DIR"
 fi
-
-# Calculate end date for display (macOS compatible)
-END_DATE=$(date -j -v+$((NUM_DAYS - 1))d -f "%Y-%m-%d" "$START_DATE" "+%Y-%m-%d")
 
 echo "Generating wildfire maps..."
 echo "Start date: $START_DATE"
