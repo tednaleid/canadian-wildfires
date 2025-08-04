@@ -1,6 +1,9 @@
 # Generated wildfire map images
 *.png
 
+# Year directories (batch output)
+[0-9][0-9][0-9][0-9]/
+
 # Tile cache directory
 tile_cache/
 

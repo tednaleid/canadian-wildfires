@@ -16,7 +16,7 @@ import sys
 import click
 import aiohttp
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -354,24 +354,64 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
     click.echo(f"Image size: {final_width}x{final_height} pixels")
 
 
+def generate_date_range(start_date: datetime, end_date: datetime, output_dir: Path, zoom: int, map_size: tuple[int, int], date_overlay: bool) -> None:
+    """Generate wildfire maps for a date range sequentially."""
+    # Calculate number of days
+    num_days = (end_date - start_date).days + 1
+    
+    click.echo("Generating wildfire maps...")
+    click.echo(f"Start date: {start_date.strftime('%Y-%m-%d')}")
+    click.echo(f"End date: {end_date.strftime('%Y-%m-%d')}")
+    click.echo(f"Number of days: {num_days}")
+    click.echo(f"Output directory: {output_dir}")
+    click.echo("")
+    
+    # Generate maps for each day
+    for i in range(num_days):
+        current_date = start_date + timedelta(days=i)
+        progress = i + 1
+        
+        click.echo(f"[{progress}/{num_days}] Generating map for {current_date.strftime('%Y-%m-%d')}...")
+        
+        # Create filename
+        filename = f"wildfire-{current_date.strftime('%Y-%m-%d')}-z{zoom}-{map_size[0]}x{map_size[1]}.png"
+        output_path = output_dir / filename
+        
+        try:
+            # Generate the map
+            asyncio.run(create_wildfire_map(current_date, output_path, zoom, map_size, date_overlay))
+            click.echo(f"  ✓ Saved: {output_path}")
+            click.echo("")
+        except Exception as e:
+            click.echo(f"  ✗ Failed to generate map for {current_date.strftime('%Y-%m-%d')}: {e}", err=True)
+            sys.exit(1)  # Stop on error as requested
+    
+    click.echo(f"🎉 All {num_days} wildfire maps generated successfully!")
+    click.echo(f"Date range: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
+    click.echo(f"Location: {output_dir}")
+
+
 @click.command()
-@click.argument('date', callback=lambda ctx, param, value: validate_date(value))
-@click.option('--output', '-o', type=click.Path(), help='Output filename (default: wildfire-YYYY-MM-DD-zZ-WxH.png)')
+@click.argument('start_date', callback=lambda ctx, param, value: validate_date(value))
+@click.argument('end_date', required=False, callback=lambda ctx, param, value: validate_date(value) if value else None)
+@click.option('--output', '-o', type=click.Path(), help='Output directory (default: current directory)')
 @click.option('--zoom', '-z', type=int, default=DEFAULT_ZOOM, help=f'Zoom level (0-{len(RESOLUTIONS)-1}, default: {DEFAULT_ZOOM})')
 @click.option('--width', '-w', type=int, default=MAP_SIZE[0], help=f'Map width in tiles (default: {MAP_SIZE[0]})')
 @click.option('--height', '-h', type=int, default=MAP_SIZE[1], help=f'Map height in tiles (default: {MAP_SIZE[1]})')
 @click.option('--date-overlay/--no-date-overlay', default=True, help='Add date overlay to upper right corner (default: enabled)')
-def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1], date_overlay: bool = True) -> None:
+def main(start_date: datetime, end_date: datetime = None, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1], date_overlay: bool = True) -> None:
     """
-    Download Canadian wildfire map for a given date.
+    Download Canadian wildfire map for a given date or date range.
     
-    DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
+    START_DATE: Starting date in YYYY-MM-DD format (e.g., 2025-08-04)
+    END_DATE: Optional ending date for range (e.g., 2025-08-07)
     
     Examples:
-        wildfire 2025-08-04                           # Default: zoom 4, 4x3 tiles, with date overlay
+        wildfire 2025-08-04                           # Single date
+        wildfire 2025-08-01 2025-08-04                # Date range  
         wildfire 2025-08-04 -z 5 -w 5 -h 4           # Custom zoom and size
         wildfire 2025-08-04 --no-date-overlay         # Disable date overlay
-        wildfire 2025-08-04 -z 3 -w 6 -h 3 -o big.png # Custom output filename
+        wildfire 2025-04-01 2025-08-04 -o 2025        # Range to directory
     """
     # Validate parameters
     if zoom < 0 or zoom >= len(RESOLUTIONS):
@@ -386,13 +426,27 @@ def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: in
         click.echo(f"Error: Height must be between 1 and 10 tiles, got {height}", err=True)
         sys.exit(1)
     
-    if output is None:
-        output = f"wildfire-{date.strftime('%Y-%m-%d')}-z{zoom}-{width}x{height}.png"
+    # Validate date range if end_date is provided
+    if end_date is not None and end_date < start_date:
+        click.echo(f"Error: End date '{end_date.strftime('%Y-%m-%d')}' must be after start date '{start_date.strftime('%Y-%m-%d')}'.", err=True)
+        sys.exit(1)
     
-    output_path = Path(output)
+    # Set up output directory
+    if output is None:
+        output_dir = Path(".")
+    else:
+        output_dir = Path(output)
+        output_dir.mkdir(parents=True, exist_ok=True)
     
     try:
-        asyncio.run(create_wildfire_map(date, output_path, zoom, (width, height), date_overlay))
+        if end_date is None:
+            # Single date mode
+            filename = f"wildfire-{start_date.strftime('%Y-%m-%d')}-z{zoom}-{width}x{height}.png"
+            output_path = output_dir / filename
+            asyncio.run(create_wildfire_map(start_date, output_path, zoom, (width, height), date_overlay))
+        else:
+            # Date range mode
+            generate_date_range(start_date, end_date, output_dir, zoom, (width, height), date_overlay)
     except KeyboardInterrupt:
         click.echo("\nOperation cancelled by user", err=True)
         sys.exit(1)
