@@ -289,7 +289,7 @@ def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: in
         sys.exit(1)
     
     if output is None:
-        output = f"wildfire-{date.strftime('%Y-%m-%d')}.png"
+        output = f"wildfire-{date.strftime('%Y-%m-%d')}-z{zoom}-{width}x{height}.png"
     
     output_path = Path(output)
     
