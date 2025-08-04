@@ -27,11 +27,12 @@ import time
 BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
 FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
 
-# Default map configuration - matching JavaScript exactly
+# Default map configuration - focused on Canada and northern content
 DEFAULT_ZOOM = 3  # Browser UI shows zoom 3 (200km scale)
-DEFAULT_CENTER = (-489719.35496475064, 659612.9289316565)  # Exact center from URL
+# Shift center northeast to focus on Canada (move from original center toward upper-right content)
+DEFAULT_CENTER = (200000, 1200000)  # Adjusted to focus on populated Canada areas
 TILE_SIZE = 256
-MAP_SIZE = (4, 3)  # tiles (width, height) for reasonable coverage
+MAP_SIZE = (3, 3)  # More square aspect ratio, focused coverage
 
 # WMTS tile grid parameters from JavaScript source (exact values)
 TILE_ORIGIN = (-34655800, 39310000)  # origin: [-3.46558E7, 3.931E7]
