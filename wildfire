@@ -23,24 +23,37 @@ from io import BytesIO
 from urllib.parse import urlencode
 import time
 
-# CWFIS API endpoints
-BASE_MAP_URL = "https://maps-cartes.services.geo.ca/server2_serveur2/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
+# CWFIS API endpoints - corrected URL from JavaScript source
+BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
 FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
 
-# Default map configuration (to match actual browser behavior)
-DEFAULT_ZOOM = 4  # Browser uses zoom 4 for base tiles
-DEFAULT_CENTER = (400000, 1000000)  # Browser's actual center coordinates
+# Default map configuration - matching JavaScript exactly
+DEFAULT_ZOOM = 3  # Browser UI shows zoom 3 (200km scale)
+DEFAULT_CENTER = (-489719.35496475064, 659612.9289316565)  # Exact center from URL
 TILE_SIZE = 256
 MAP_SIZE = (4, 3)  # tiles (width, height) for reasonable coverage
 
-# WMTS tile grid parameters from OpenLayers (layer0)
-TILE_ORIGIN = (-34655800, 39310000)  # Upper-left origin
+# WMTS tile grid parameters from JavaScript source (exact values)
+TILE_ORIGIN = (-34655800, 39310000)  # origin: [-3.46558E7, 3.931E7]
 RESOLUTIONS = [
-    38364.660062653464, 22489.62831258996, 13229.193125052918, 7937.5158750317505,
-    4630.2175937685215, 2645.8386250105837, 1587.5031750063501, 926.0435187537042,
-    529.1677250021168, 317.50063500127004, 185.20870375074085, 111.12522225044451,
-    66.1459656252646, 38.36466006265346, 22.48962831258996, 13.229193125052918,
-    7.9375158750317505, 4.6302175937685215
+    38364.660062653464,    # 0
+    22489.62831258996,     # 1  
+    13229.193125052918,    # 2
+    7937.5158750317505,    # 3 <- DEFAULT_ZOOM (200km scale)
+    4630.2175937685215,    # 4
+    2645.8386250105837,    # 5
+    1587.5031750063501,    # 6
+    926.0435187537042,     # 7
+    529.1677250021168,     # 8
+    317.50063500127004,    # 9
+    185.20870375074085,    # 10
+    111.12522225044451,    # 11
+    66.1459656252646,      # 12
+    38.36466006265346,     # 13
+    22.48962831258996,     # 14
+    13.229193125052918,    # 15
+    7.9375158750317505,    # 16
+    4.6302175937685215     # 17
 ]
 
 def validate_date(date_str: str) -> datetime:
@@ -51,56 +64,42 @@ def validate_date(date_str: str) -> datetime:
         raise click.BadParameter(f"Date must be in YYYY-MM-DD format, got: {date_str}")
 
 def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
-    """Convert EPSG:3978 coordinates to tile coordinates using browser-observed mapping."""
-    # Hard-code the relationship observed from browser: center (400000, 1000000) -> tile (31.5, 29.5)
-    if zoom == 4:
-        # Browser shows tiles 30-33, 27-32, so center is around (31.5, 29.5) 
-        center_epsg_x, center_epsg_y = 400000, 1000000
-        center_tile_x, center_tile_y = 31.5, 29.5
-        
-        # Estimate scale: tiles are ~1.587M EPSG units wide at zoom 4 based on browser bboxes
-        tile_size_epsg = 1587500  # From browser BBOX differences
-        
-        # Calculate tile offset from center
-        offset_x = (x - center_epsg_x) / tile_size_epsg
-        offset_y = (center_epsg_y - y) / tile_size_epsg  # Y is flipped
-        
-        tile_x = int(center_tile_x + offset_x)
-        tile_y = int(center_tile_y + offset_y)
-        
-        return tile_x, tile_y
-    else:
-        raise ValueError(f"Only zoom level 4 is supported, got {zoom}")
+    """Convert EPSG:3978 coordinates to tile coordinates using WMTS grid calculation."""
+    if zoom >= len(RESOLUTIONS):
+        raise ValueError(f"Zoom level {zoom} not supported, max is {len(RESOLUTIONS)-1}")
+    
+    resolution = RESOLUTIONS[zoom]
+    origin_x, origin_y = TILE_ORIGIN
+    
+    # WMTS tile grid calculation
+    # TileCol (X): how many tiles east from origin
+    tile_col = int((x - origin_x) / (resolution * TILE_SIZE))
+    
+    # TileRow (Y): how many tiles south from origin  
+    tile_row = int((origin_y - y) / (resolution * TILE_SIZE))
+    
+    return tile_col, tile_row
 
-def tile_to_epsg3978_bbox(tile_x: int, tile_y: int, zoom: int) -> tuple[float, float, float, float]:
-    """Convert tile coordinates to EPSG:3978 bounding box using browser-observed mapping."""
-    if zoom == 4:
-        # Use the same mapping as epsg3978_to_tile but in reverse
-        center_epsg_x, center_epsg_y = 400000, 1000000
-        center_tile_x, center_tile_y = 31.5, 29.5
-        tile_size_epsg = 1587500
-        
-        # Calculate tile center
-        offset_x = (tile_x - center_tile_x) * tile_size_epsg
-        offset_y = (center_tile_y - tile_y) * tile_size_epsg  # Y is flipped
-        
-        tile_center_x = center_epsg_x + offset_x
-        tile_center_y = center_epsg_y + offset_y
-        
-        # Calculate bbox (tile extends half tile_size in each direction)
-        half_tile = tile_size_epsg / 2
-        min_x = tile_center_x - half_tile
-        max_x = tile_center_x + half_tile
-        min_y = tile_center_y - half_tile
-        max_y = tile_center_y + half_tile
-        
-        return min_x, min_y, max_x, max_y
-    else:
-        raise ValueError(f"Only zoom level 4 is supported, got {zoom}")
+def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[float, float, float, float]:
+    """Convert tile coordinates to EPSG:3978 bounding box using WMTS grid calculation."""
+    if zoom >= len(RESOLUTIONS):
+        raise ValueError(f"Zoom level {zoom} not supported, max is {len(RESOLUTIONS)-1}")
+    
+    resolution = RESOLUTIONS[zoom]
+    origin_x, origin_y = TILE_ORIGIN
+    tile_size_map_units = resolution * TILE_SIZE
+    
+    # Calculate tile bounds
+    min_x = origin_x + (tile_col * tile_size_map_units)
+    max_x = min_x + tile_size_map_units
+    max_y = origin_y - (tile_row * tile_size_map_units)
+    min_y = max_y - tile_size_map_units
+    
+    return min_x, min_y, max_x, max_y
 
-def download_base_tile(tile_x: int, tile_y: int, zoom: int) -> Image.Image:
+def download_base_tile(tile_col: int, tile_row: int, zoom: int) -> Image.Image:
     """Download a base map tile."""
-    url = f"{BASE_MAP_URL}/{zoom}/{tile_x}/{tile_y}.jpg"
+    url = f"{BASE_MAP_URL}/{zoom}/{tile_row}/{tile_col}.jpg"
     
     try:
         response = requests.get(url, timeout=10)
@@ -109,13 +108,13 @@ def download_base_tile(tile_x: int, tile_y: int, zoom: int) -> Image.Image:
         # Check if this is a blank tile
         blank_tile = response.headers.get('blank-tile') == 'true'
         if blank_tile:
-            click.echo(f"Warning: Tile {tile_x},{tile_y} is blank (outside coverage area)", err=True)
+            click.echo(f"Warning: Tile {tile_col},{tile_row} is blank (outside coverage area)", err=True)
         
         image = Image.open(BytesIO(response.content))
-        click.echo(f"Downloaded base tile {tile_x},{tile_y}: {len(response.content)} bytes, format: {image.format}")
+        click.echo(f"Downloaded base tile {tile_col},{tile_row}: {len(response.content)} bytes, format: {image.format}")
         return image
     except Exception as e:
-        click.echo(f"Warning: Failed to download base tile {tile_x},{tile_y}: {e}", err=True)
+        click.echo(f"Warning: Failed to download base tile {tile_col},{tile_row}: {e}", err=True)
         # Return blank tile
         return Image.new('RGB', (TILE_SIZE, TILE_SIZE), color='lightgray')
 
@@ -166,14 +165,15 @@ def create_wildfire_map(date: datetime, output_path: Path) -> None:
     
     # Calculate tile grid around default center
     center_x, center_y = DEFAULT_CENTER
-    center_tile_x, center_tile_y = epsg3978_to_tile(center_x, center_y, DEFAULT_ZOOM)
+    center_tile_col, center_tile_row = epsg3978_to_tile(center_x, center_y, DEFAULT_ZOOM)
     
     # Calculate tile bounds for map coverage
     tiles_wide, tiles_high = MAP_SIZE
-    start_tile_x = center_tile_x - tiles_wide // 2
-    start_tile_y = center_tile_y - tiles_high // 2
+    start_tile_col = center_tile_col - tiles_wide // 2
+    start_tile_row = center_tile_row - tiles_high // 2
     
-    click.echo(f"Downloading {tiles_wide}x{tiles_high} tiles centered on tile {center_tile_x},{center_tile_y}")
+    click.echo(f"Downloading {tiles_wide}x{tiles_high} tiles centered on tile {center_tile_col},{center_tile_row}")
+    click.echo(f"Tile range: col {start_tile_col} to {start_tile_col + tiles_wide - 1}, row {start_tile_row} to {start_tile_row + tiles_high - 1}")
     
     # Create final image
     final_width = tiles_wide * TILE_SIZE
@@ -181,20 +181,20 @@ def create_wildfire_map(date: datetime, output_path: Path) -> None:
     final_image = Image.new('RGB', (final_width, final_height))
     
     # Download and composite tiles
-    # Note: tile_x represents north-south (increasing x = more south)  
-    # Note: tile_y represents west-east (increasing y = more east)
-    for ty in range(tiles_high):
-        for tx in range(tiles_wide):
-            tile_x = start_tile_x + ty  # ty maps to north-south (tile_x)
-            tile_y = start_tile_y + tx  # tx maps to west-east (tile_y)
+    # In WMTS: col = X (east), row = Y (south from origin)
+    # In final image: x = horizontal (west to east), y = vertical (north to south)
+    for row_idx in range(tiles_high):
+        for col_idx in range(tiles_wide):
+            tile_col = start_tile_col + col_idx  # col_idx maps to tile columns (east-west)
+            tile_row = start_tile_row + row_idx  # row_idx maps to tile rows (north-south)
             
-            click.echo(f"Processing tile {tx+1},{ty+1} of {tiles_wide},{tiles_high} (tile coords: {tile_x},{tile_y})")
+            click.echo(f"Processing image position {col_idx+1},{row_idx+1} of {tiles_wide},{tiles_high} (tile coords: col={tile_col}, row={tile_row})")
             
             # Download base tile
-            base_tile = download_base_tile(tile_x, tile_y, DEFAULT_ZOOM)
+            base_tile = download_base_tile(tile_col, tile_row, DEFAULT_ZOOM)
             
             # Download fire overlay
-            bbox = tile_to_epsg3978_bbox(tile_x, tile_y, DEFAULT_ZOOM)
+            bbox = tile_to_epsg3978_bbox(tile_col, tile_row, DEFAULT_ZOOM)
             fire_overlay = download_fire_overlay(bbox, date_str)
             
             # Composite base and overlay
@@ -205,10 +205,10 @@ def create_wildfire_map(date: datetime, output_path: Path) -> None:
             else:
                 composite = base_tile
             
-            # Place in final image - tx=horizontal, ty=vertical in final image
-            paste_x = tx * TILE_SIZE
-            paste_y = ty * TILE_SIZE
-            click.echo(f"  -> Placing tile {tile_x},{tile_y} at position {paste_x},{paste_y} in final image")
+            # Place in final image - col_idx=horizontal (x), row_idx=vertical (y)
+            paste_x = col_idx * TILE_SIZE
+            paste_y = row_idx * TILE_SIZE
+            click.echo(f"  -> Placing tile col={tile_col}, row={tile_row} at position {paste_x},{paste_y} in final image")
             final_image.paste(composite, (paste_x, paste_y))
             
             # Brief delay to be respectful to servers
