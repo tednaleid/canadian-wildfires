@@ -3,6 +3,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #     "requests",
+#     "aiohttp",
 #     "pillow", 
 #     "click",
 #     "pyproj",
@@ -15,6 +16,8 @@
 import sys
 import click
 import requests
+import aiohttp
+import asyncio
 from datetime import datetime
 from pathlib import Path
 import math
@@ -24,6 +27,7 @@ from urllib.parse import urlencode
 import time
 import os
 import hashlib
+from dataclasses import dataclass
 
 # CWFIS API endpoints - corrected URL from JavaScript source
 BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
@@ -39,6 +43,17 @@ MAP_SIZE = (4, 3)  # 4 wide x 3 high - add western column for Alberta/Pacific co
 # Tile caching configuration
 CACHE_DIR = Path("tile_cache")
 TILE_CACHE_VERSION = "v1"  # Increment if cache format changes
+
+@dataclass
+class TileInfo:
+    """Information about a tile to be downloaded and positioned."""
+    col: int
+    row: int
+    zoom: int
+    bbox: tuple[float, float, float, float]
+    paste_x: int
+    paste_y: int
+    image_pos: tuple[int, int]  # For logging (col_idx+1, row_idx+1)
 
 # WMTS tile grid parameters from JavaScript source (exact values)
 TILE_ORIGIN = (-34655800, 39310000)  # origin: [-3.46558E7, 3.931E7]
@@ -91,6 +106,84 @@ def save_tile_to_cache(tile_col: int, tile_row: int, zoom: int, image_data: byte
     cache_path = get_tile_cache_path(tile_col, tile_row, zoom)
     with open(cache_path, 'wb') as f:
         f.write(image_data)
+
+async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: TileInfo) -> tuple[TileInfo, Image.Image]:
+    """Download a base map tile asynchronously, using cache if available."""
+    # Check cache first
+    if is_tile_cached(tile_info.col, tile_info.row, tile_info.zoom):
+        click.echo(f"Using cached base tile {tile_info.col},{tile_info.row}")
+        image = load_cached_tile(tile_info.col, tile_info.row, tile_info.zoom)
+        return tile_info, image
+    
+    # Download from server
+    url = f"{BASE_MAP_URL}/{tile_info.zoom}/{tile_info.row}/{tile_info.col}.jpg"
+    
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+            response.raise_for_status()
+            content = await response.read()
+            
+            # Check if this is a blank tile
+            blank_tile = response.headers.get('blank-tile') == 'true'
+            if blank_tile:
+                click.echo(f"Warning: Tile {tile_info.col},{tile_info.row} is blank (outside coverage area)", err=True)
+            
+            # Save to cache before processing
+            save_tile_to_cache(tile_info.col, tile_info.row, tile_info.zoom, content)
+            
+            image = Image.open(BytesIO(content))
+            click.echo(f"Downloaded and cached base tile {tile_info.col},{tile_info.row}: {len(content)} bytes, format: {image.format}")
+            return tile_info, image
+            
+    except Exception as e:
+        click.echo(f"Warning: Failed to download base tile {tile_info.col},{tile_info.row}: {e}", err=True)
+        # Return blank tile
+        blank_image = Image.new('RGB', (TILE_SIZE, TILE_SIZE), color='lightgray')
+        return tile_info, blank_image
+
+async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date_str: str) -> tuple[TileInfo, Image.Image]:
+    """Download fire perimeter overlay for a tile asynchronously."""
+    min_x, min_y, max_x, max_y = tile_info.bbox
+    
+    params = {
+        'SERVICE': 'WMS',
+        'VERSION': '1.3.0',
+        'REQUEST': 'GetMap',
+        'FORMAT': 'image/png',
+        'TRANSPARENT': 'true',
+        'LAYERS': 'public:m3_polygons',
+        'CQL_FILTER': f"mindate <= '{date_str} 12:00:00' and maxdate >= '{date_str} 12:00:00'",
+        'WIDTH': str(TILE_SIZE),
+        'HEIGHT': str(TILE_SIZE),
+        'CRS': 'EPSG:3978',
+        'STYLES': '',
+        'BBOX': f'{min_x},{min_y},{max_x},{max_y}'
+    }
+    
+    try:
+        async with session.get(FIRE_PERIMETER_URL, params=params, timeout=aiohttp.ClientTimeout(total=15)) as response:
+            response.raise_for_status()
+            content = await response.read()
+            image = Image.open(BytesIO(content))
+            
+            # Only show success message if we got actual fire data (not just empty transparent)
+            if len(content) > 1000:  # More than just a small transparent PNG
+                click.echo(f"Downloaded fire overlay for tile {tile_info.col},{tile_info.row}: {len(content)} bytes")
+            
+            return tile_info, image
+            
+    except aiohttp.ClientResponseError as e:
+        if e.status == 404:
+            # 404 is normal - means no fire data for this tile/date
+            pass
+        else:
+            click.echo(f"Warning: HTTP error downloading fire overlay for tile {tile_info.col},{tile_info.row}: {e}", err=True)
+    except Exception as e:
+        click.echo(f"Warning: Failed to download fire overlay for tile {tile_info.col},{tile_info.row}: {e}", err=True)
+    
+    # Return empty overlay
+    empty_image = Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
+    return tile_info, empty_image
 
 def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
     """Convert EPSG:3978 coordinates to tile coordinates using WMTS grid calculation."""
@@ -196,6 +289,88 @@ def download_fire_overlay(bbox: tuple[float, float, float, float], date_str: str
         click.echo(f"Warning: Failed to download fire overlay: {e}", err=True)
         return Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
 
+async def create_wildfire_map_async(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE) -> None:
+    """Create a wildfire map for the given date using async downloads."""
+    date_str = date.strftime("%Y-%m-%d")
+    click.echo(f"Creating wildfire map for {date_str}...")
+    click.echo(f"Configuration: zoom={zoom}, map_size={map_size[0]}x{map_size[1]} tiles")
+    
+    # Calculate tile grid around default center
+    center_x, center_y = DEFAULT_CENTER
+    center_tile_col, center_tile_row = epsg3978_to_tile(center_x, center_y, zoom)
+    
+    # Calculate tile bounds for map coverage
+    tiles_wide, tiles_high = map_size
+    start_tile_col = center_tile_col - tiles_wide // 2
+    start_tile_row = center_tile_row - tiles_high // 2
+    
+    click.echo(f"Downloading {tiles_wide}x{tiles_high} tiles centered on tile {center_tile_col},{center_tile_row}")
+    click.echo(f"Tile range: col {start_tile_col} to {start_tile_col + tiles_wide - 1}, row {start_tile_row} to {start_tile_row + tiles_high - 1}")
+    
+    # Prepare all tile requests upfront
+    tile_requests = []
+    for row_idx in range(tiles_high):
+        for col_idx in range(tiles_wide):
+            tile_col = start_tile_col + col_idx
+            tile_row = start_tile_row + row_idx
+            bbox = tile_to_epsg3978_bbox(tile_col, tile_row, zoom)
+            
+            tile_info = TileInfo(
+                col=tile_col,
+                row=tile_row,
+                zoom=zoom,
+                bbox=bbox,
+                paste_x=col_idx * TILE_SIZE,
+                paste_y=row_idx * TILE_SIZE,
+                image_pos=(col_idx+1, row_idx+1)
+            )
+            tile_requests.append(tile_info)
+    
+    # Create final image
+    final_width = tiles_wide * TILE_SIZE
+    final_height = tiles_high * TILE_SIZE
+    final_image = Image.new('RGB', (final_width, final_height))
+    
+    # Configure connection limits for server kindness
+    connector = aiohttp.TCPConnector(
+        limit=100,           # Total connection pool size
+        limit_per_host=8,    # Max connections per host
+        ttl_dns_cache=300    # DNS cache TTL
+    )
+    
+    # Download all tiles concurrently
+    async with aiohttp.ClientSession(connector=connector) as session:
+        click.echo("Starting concurrent downloads...")
+        
+        # Download base tiles and fire overlays concurrently
+        base_tasks = [download_base_tile_async(session, tile_info) for tile_info in tile_requests]
+        fire_tasks = [download_fire_overlay_async(session, tile_info, date_str) for tile_info in tile_requests]
+        
+        # Wait for all downloads to complete (maintains order!)
+        base_results = await asyncio.gather(*base_tasks)
+        fire_results = await asyncio.gather(*fire_tasks)
+    
+    # Composite results in order
+    click.echo("Compositing tiles...")
+    for (tile_info, base_tile), (_, fire_overlay) in zip(base_results, fire_results):
+        click.echo(f"  -> Placing tile col={tile_info.col}, row={tile_info.row} at position {tile_info.paste_x},{tile_info.paste_y}")
+        
+        # Composite base and overlay
+        if fire_overlay.mode == 'RGBA':
+            base_tile = base_tile.convert('RGBA')
+            composite = Image.alpha_composite(base_tile, fire_overlay)
+            composite = composite.convert('RGB')
+        else:
+            composite = base_tile
+        
+        # Place in final image
+        final_image.paste(composite, (tile_info.paste_x, tile_info.paste_y))
+    
+    # Save final image
+    final_image.save(output_path, 'PNG', optimize=True)
+    click.echo(f"Wildfire map saved to: {output_path}")
+    click.echo(f"Image size: {final_width}x{final_height} pixels")
+
 def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE) -> None:
     """Create a wildfire map for the given date."""
     date_str = date.strftime("%Y-%m-%d")
@@ -260,20 +435,22 @@ def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_Z
 
 @click.command()
 @click.argument('date', callback=lambda ctx, param, value: validate_date(value))
-@click.option('--output', '-o', type=click.Path(), help='Output filename (default: wildfire-YYYY-MM-DD.png)')
+@click.option('--output', '-o', type=click.Path(), help='Output filename (default: wildfire-YYYY-MM-DD-zZ-WxH.png)')
 @click.option('--zoom', '-z', type=int, default=DEFAULT_ZOOM, help=f'Zoom level (0-{len(RESOLUTIONS)-1}, default: {DEFAULT_ZOOM})')
 @click.option('--width', '-w', type=int, default=MAP_SIZE[0], help=f'Map width in tiles (default: {MAP_SIZE[0]})')
 @click.option('--height', '-h', type=int, default=MAP_SIZE[1], help=f'Map height in tiles (default: {MAP_SIZE[1]})')
-def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1]) -> None:
+@click.option('--async-downloads', '-a', is_flag=True, help='Use async downloads with connection pooling')
+def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1], async_downloads: bool = False) -> None:
     """
     Download Canadian wildfire map for a given date.
     
     DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
     
     Examples:
-        wildfire 2025-08-04
-        wildfire 2025-08-04 --zoom 5 --width 5 --height 4
-        wildfire 2025-08-04 -z 3 -w 6 -h 3 -o custom-map.png
+        wildfire 2025-08-04                                    # Sync downloads (default)
+        wildfire 2025-08-04 --async-downloads                 # Async downloads with connection pooling
+        wildfire 2025-08-04 -z 5 -w 5 -h 4                   # Custom zoom and size
+        wildfire 2025-08-04 -z 3 -w 6 -h 3 -a -o big-map.png # Async with custom output
     """
     # Validate parameters
     if zoom < 0 or zoom >= len(RESOLUTIONS):
@@ -294,7 +471,11 @@ def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: in
     output_path = Path(output)
     
     try:
-        create_wildfire_map(date, output_path, zoom, (width, height))
+        if async_downloads:
+            click.echo("Using async downloads with connection pooling...")
+            asyncio.run(create_wildfire_map_async(date, output_path, zoom, (width, height)))
+        else:
+            create_wildfire_map(date, output_path, zoom, (width, height))
     except KeyboardInterrupt:
         click.echo("\nOperation cancelled by user", err=True)
         sys.exit(1)
