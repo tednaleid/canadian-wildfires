@@ -218,11 +218,16 @@ def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
     x = img_with_overlay.width - text_width - margin
     y = margin
     
-    # Draw red text with slight shadow for better contrast
-    shadow_offset = 2
-    # Draw shadow (dark red)
-    draw.text((x + shadow_offset, y + shadow_offset), date_text, fill=(100, 0, 0), font=font)
-    # Draw main text (bright red)
+    # Draw red text with white outline for better contrast
+    outline_width = 2
+    
+    # Draw outline by drawing the text in white at multiple positions around the main position
+    for offset_x in range(-outline_width, outline_width + 1):
+        for offset_y in range(-outline_width, outline_width + 1):
+            if offset_x != 0 or offset_y != 0:  # Skip the center position
+                draw.text((x + offset_x, y + offset_y), date_text, fill=(255, 255, 255), font=font)
+    
+    # Draw main text (bright red) on top
     draw.text((x, y), date_text, fill=(255, 50, 50), font=font)
     
     return img_with_overlay
