@@ -22,16 +22,15 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from dataclasses import dataclass
 
-# CWFIS API endpoints - corrected URL from JavaScript source
+# CWFIS API endpoints
 BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
 FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
 
-# Default map configuration - higher detail, extended west coverage
-DEFAULT_ZOOM = 4  # Higher zoom for more detail (was 200km scale, now ~115km scale)
-# Shift center west to focus on Canada landmass, reduce Atlantic Ocean coverage
-DEFAULT_CENTER = (-200000, 1200000)  # Move west from 200000 to -200000
+# Default map configuration
+DEFAULT_ZOOM = 4  # Zoom level 4 provides ~115km scale
+DEFAULT_CENTER = (-200000, 1200000)  # Center focused on Canadian landmass
 TILE_SIZE = 256
-MAP_SIZE = (4, 3)  # 4 wide x 3 high - add western column for Alberta/Pacific coast
+MAP_SIZE = (4, 3)  # 4 tiles wide x 3 tiles high for optimal coverage
 
 # Tile caching configuration
 CACHE_DIR = Path("tile_cache")
@@ -48,13 +47,13 @@ class TileInfo:
     paste_y: int
     image_pos: tuple[int, int]  # For logging (col_idx+1, row_idx+1)
 
-# WMTS tile grid parameters from JavaScript source (exact values)
-TILE_ORIGIN = (-34655800, 39310000)  # origin: [-3.46558E7, 3.931E7]
+# WMTS tile grid parameters
+TILE_ORIGIN = (-34655800, 39310000)  # Upper-left origin point
 RESOLUTIONS = [
     38364.660062653464,    # 0
     22489.62831258996,     # 1  
     13229.193125052918,    # 2
-    7937.5158750317505,    # 3 <- DEFAULT_ZOOM (200km scale)
+    7937.5158750317505,    # 3
     4630.2175937685215,    # 4
     2645.8386250105837,    # 5
     1587.5031750063501,    # 6
@@ -101,7 +100,7 @@ def save_tile_to_cache(tile_col: int, tile_row: int, zoom: int, image_data: byte
         f.write(image_data)
 
 async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: TileInfo) -> tuple[TileInfo, Image.Image]:
-    """Download a base map tile asynchronously, using cache if available."""
+    """Download a base map tile with caching support."""
     # Check cache first
     if is_tile_cached(tile_info.col, tile_info.row, tile_info.zoom):
         click.echo(f"Using cached base tile {tile_info.col},{tile_info.row}")
@@ -135,7 +134,7 @@ async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: Ti
         return tile_info, blank_image
 
 async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date_str: str) -> tuple[TileInfo, Image.Image]:
-    """Download fire perimeter overlay for a tile asynchronously."""
+    """Download fire perimeter overlay for a tile."""
     min_x, min_y, max_x, max_y = tile_info.bbox
     
     params = {
@@ -233,7 +232,7 @@ def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
     return img_with_overlay
 
 def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
-    """Convert EPSG:3978 coordinates to tile coordinates using WMTS grid calculation."""
+    """Convert EPSG:3978 coordinates to tile coordinates."""
     if zoom >= len(RESOLUTIONS):
         raise ValueError(f"Zoom level {zoom} not supported, max is {len(RESOLUTIONS)-1}")
     
@@ -250,7 +249,7 @@ def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
     return tile_col, tile_row
 
 def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[float, float, float, float]:
-    """Convert tile coordinates to EPSG:3978 bounding box using WMTS grid calculation."""
+    """Convert tile coordinates to EPSG:3978 bounding box."""
     if zoom >= len(RESOLUTIONS):
         raise ValueError(f"Zoom level {zoom} not supported, max is {len(RESOLUTIONS)-1}")
     
@@ -268,7 +267,7 @@ def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[floa
 
 
 async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE, date_overlay: bool = True) -> None:
-    """Create a wildfire map for the given date using async downloads."""
+    """Create a wildfire map for the given date."""
     date_str = date.strftime("%Y-%m-%d")
     click.echo(f"Creating wildfire map for {date_str}...")
     click.echo(f"Configuration: zoom={zoom}, map_size={map_size[0]}x{map_size[1]} tiles")
@@ -364,7 +363,7 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
 @click.option('--date-overlay/--no-date-overlay', default=True, help='Add date overlay to upper right corner (default: enabled)')
 def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1], date_overlay: bool = True) -> None:
     """
-    Download Canadian wildfire map for a given date using async downloads with connection pooling.
+    Download Canadian wildfire map for a given date.
     
     DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
     
