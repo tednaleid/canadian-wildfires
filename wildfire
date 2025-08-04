@@ -1,0 +1,235 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "requests",
+#     "pillow", 
+#     "click",
+#     "pyproj",
+# ]
+# ///
+
+# ABOUTME: Canadian wildfire map scraper that downloads base map tiles and fire perimeter data for a given date
+# ABOUTME: Creates composite images showing wildfire perimeters overlaid on topographic base maps using CWFIS data
+
+import sys
+import click
+import requests
+from datetime import datetime
+from pathlib import Path
+import math
+from PIL import Image, ImageDraw
+from io import BytesIO
+from urllib.parse import urlencode
+import time
+
+# CWFIS API endpoints
+BASE_MAP_URL = "https://maps-cartes.services.geo.ca/server2_serveur2/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
+FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
+
+# Default map configuration (200km resolution)
+DEFAULT_ZOOM = 5
+DEFAULT_CENTER = (-665915.29104065, 703653.1786910219)  # EPSG:3978 coordinates
+TILE_SIZE = 256
+MAP_SIZE = (4, 3)  # tiles (width, height) for reasonable coverage
+
+def validate_date(date_str: str) -> datetime:
+    """Validate and parse ISO8601 date string."""
+    try:
+        return datetime.strptime(date_str, "%Y-%m-%d")
+    except ValueError:
+        raise click.BadParameter(f"Date must be in YYYY-MM-DD format, got: {date_str}")
+
+def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
+    """Convert EPSG:3978 coordinates to tile coordinates."""
+    # Based on observed browser requests, use known working tile coordinates
+    # The browser was using tiles around 56,50 for the center of Canada
+    # Let's use a simpler approach based on known working coordinates
+    
+    # Default center in EPSG:3978: -665915.29104065, 703653.1786910219
+    # This maps to approximately tile 56,50 at zoom 5 based on browser observation
+    
+    center_epsg_x, center_epsg_y = -665915.29104065, 703653.1786910219
+    center_tile_x, center_tile_y = 56, 50  # From browser observation
+    
+    # Rough conversion based on tile size in EPSG:3978 coordinates
+    # Each tile at zoom 5 covers approximately 200km
+    tile_size_epsg = 200000  # 200km in meters
+    
+    offset_x = (x - center_epsg_x) / tile_size_epsg
+    offset_y = (center_epsg_y - y) / tile_size_epsg  # Y is flipped
+    
+    tile_x = int(center_tile_x + offset_x)
+    tile_y = int(center_tile_y + offset_y)
+    
+    return tile_x, tile_y
+
+def tile_to_epsg3978_bbox(tile_x: int, tile_y: int, zoom: int) -> tuple[float, float, float, float]:
+    """Convert tile coordinates to EPSG:3978 bounding box."""
+    # Use the reverse of the conversion above
+    center_epsg_x, center_epsg_y = -665915.29104065, 703653.1786910219
+    center_tile_x, center_tile_y = 56, 50
+    tile_size_epsg = 200000  # 200km in meters
+    
+    # Calculate center of this tile
+    offset_x = (tile_x - center_tile_x) * tile_size_epsg
+    offset_y = (center_tile_y - tile_y) * tile_size_epsg  # Y is flipped
+    
+    tile_center_x = center_epsg_x + offset_x
+    tile_center_y = center_epsg_y + offset_y
+    
+    # Calculate bbox (tile extends half tile_size in each direction)
+    half_tile = tile_size_epsg / 2
+    bbox_min_x = tile_center_x - half_tile
+    bbox_max_x = tile_center_x + half_tile
+    bbox_min_y = tile_center_y - half_tile
+    bbox_max_y = tile_center_y + half_tile
+    
+    return bbox_min_x, bbox_min_y, bbox_max_x, bbox_max_y
+
+def download_base_tile(tile_x: int, tile_y: int, zoom: int) -> Image.Image:
+    """Download a base map tile."""
+    url = f"{BASE_MAP_URL}/{zoom}/{tile_x}/{tile_y}.jpg"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        
+        # Check if this is a blank tile
+        blank_tile = response.headers.get('blank-tile') == 'true'
+        if blank_tile:
+            click.echo(f"Warning: Tile {tile_x},{tile_y} is blank (outside coverage area)", err=True)
+        
+        image = Image.open(BytesIO(response.content))
+        click.echo(f"Downloaded base tile {tile_x},{tile_y}: {len(response.content)} bytes, format: {image.format}")
+        return image
+    except Exception as e:
+        click.echo(f"Warning: Failed to download base tile {tile_x},{tile_y}: {e}", err=True)
+        # Return blank tile
+        return Image.new('RGB', (TILE_SIZE, TILE_SIZE), color='lightgray')
+
+def download_fire_overlay(bbox: tuple[float, float, float, float], date_str: str) -> Image.Image:
+    """Download fire perimeter overlay for a tile."""
+    min_x, min_y, max_x, max_y = bbox
+    
+    params = {
+        'SERVICE': 'WMS',
+        'VERSION': '1.3.0',
+        'REQUEST': 'GetMap',
+        'FORMAT': 'image/png',
+        'TRANSPARENT': 'true',
+        'LAYERS': 'public:m3_polygons',
+        'CQL_FILTER': f"mindate <= '{date_str} 12:00:00' and maxdate >= '{date_str} 12:00:00'",
+        'WIDTH': str(TILE_SIZE),
+        'HEIGHT': str(TILE_SIZE),
+        'CRS': 'EPSG:3978',
+        'STYLES': '',
+        'BBOX': f'{min_x},{min_y},{max_x},{max_y}'
+    }
+    
+    url = f"{FIRE_PERIMETER_URL}?{urlencode(params)}"
+    
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        image = Image.open(BytesIO(response.content))
+        # Only show success message if we got actual fire data (not just empty transparent)
+        if len(response.content) > 1000:  # More than just a small transparent PNG
+            click.echo(f"Downloaded fire overlay: {len(response.content)} bytes")
+        return image
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            # 404 is normal - means no fire data for this tile/date
+            pass
+        else:
+            click.echo(f"Warning: HTTP error downloading fire overlay: {e}", err=True)
+        return Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
+    except Exception as e:
+        click.echo(f"Warning: Failed to download fire overlay: {e}", err=True)
+        return Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
+
+def create_wildfire_map(date: datetime, output_path: Path) -> None:
+    """Create a wildfire map for the given date."""
+    date_str = date.strftime("%Y-%m-%d")
+    click.echo(f"Creating wildfire map for {date_str}...")
+    
+    # Calculate tile grid around default center
+    center_x, center_y = DEFAULT_CENTER
+    center_tile_x, center_tile_y = epsg3978_to_tile(center_x, center_y, DEFAULT_ZOOM)
+    
+    # Calculate tile bounds for map coverage
+    tiles_wide, tiles_high = MAP_SIZE
+    start_tile_x = center_tile_x - tiles_wide // 2
+    start_tile_y = center_tile_y - tiles_high // 2
+    
+    click.echo(f"Downloading {tiles_wide}x{tiles_high} tiles centered on tile {center_tile_x},{center_tile_y}")
+    
+    # Create final image
+    final_width = tiles_wide * TILE_SIZE
+    final_height = tiles_high * TILE_SIZE
+    final_image = Image.new('RGB', (final_width, final_height))
+    
+    # Download and composite tiles
+    for ty in range(tiles_high):
+        for tx in range(tiles_wide):
+            tile_x = start_tile_x + tx
+            tile_y = start_tile_y + ty
+            
+            click.echo(f"Processing tile {tx+1},{ty+1} of {tiles_wide},{tiles_high} (tile coords: {tile_x},{tile_y})")
+            
+            # Download base tile
+            base_tile = download_base_tile(tile_x, tile_y, DEFAULT_ZOOM)
+            
+            # Download fire overlay
+            bbox = tile_to_epsg3978_bbox(tile_x, tile_y, DEFAULT_ZOOM)
+            fire_overlay = download_fire_overlay(bbox, date_str)
+            
+            # Composite base and overlay
+            if fire_overlay.mode == 'RGBA':
+                base_tile = base_tile.convert('RGBA')
+                composite = Image.alpha_composite(base_tile, fire_overlay)
+                composite = composite.convert('RGB')
+            else:
+                composite = base_tile
+            
+            # Place in final image
+            paste_x = tx * TILE_SIZE
+            paste_y = ty * TILE_SIZE
+            final_image.paste(composite, (paste_x, paste_y))
+            
+            # Brief delay to be respectful to servers
+            time.sleep(0.1)
+    
+    # Save final image
+    final_image.save(output_path, 'PNG', optimize=True)
+    click.echo(f"Wildfire map saved to: {output_path}")
+    click.echo(f"Image size: {final_width}x{final_height} pixels")
+
+@click.command()
+@click.argument('date', callback=lambda ctx, param, value: validate_date(value))
+@click.option('--output', '-o', type=click.Path(), help='Output filename (default: wildfire-YYYY-MM-DD.png)')
+def main(date: datetime, output: str = None) -> None:
+    """
+    Download Canadian wildfire map for a given date.
+    
+    DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
+    
+    Example:
+        wildfire 2025-08-04
+    """
+    if output is None:
+        output = f"wildfire-{date.strftime('%Y-%m-%d')}.png"
+    
+    output_path = Path(output)
+    
+    try:
+        create_wildfire_map(date, output_path)
+    except KeyboardInterrupt:
+        click.echo("\nOperation cancelled by user", err=True)
+        sys.exit(1)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
