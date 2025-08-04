@@ -159,17 +159,18 @@ def download_fire_overlay(bbox: tuple[float, float, float, float], date_str: str
         click.echo(f"Warning: Failed to download fire overlay: {e}", err=True)
         return Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
 
-def create_wildfire_map(date: datetime, output_path: Path) -> None:
+def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE) -> None:
     """Create a wildfire map for the given date."""
     date_str = date.strftime("%Y-%m-%d")
     click.echo(f"Creating wildfire map for {date_str}...")
+    click.echo(f"Configuration: zoom={zoom}, map_size={map_size[0]}x{map_size[1]} tiles")
     
     # Calculate tile grid around default center
     center_x, center_y = DEFAULT_CENTER
-    center_tile_col, center_tile_row = epsg3978_to_tile(center_x, center_y, DEFAULT_ZOOM)
+    center_tile_col, center_tile_row = epsg3978_to_tile(center_x, center_y, zoom)
     
     # Calculate tile bounds for map coverage
-    tiles_wide, tiles_high = MAP_SIZE
+    tiles_wide, tiles_high = map_size
     start_tile_col = center_tile_col - tiles_wide // 2
     start_tile_row = center_tile_row - tiles_high // 2
     
@@ -192,10 +193,10 @@ def create_wildfire_map(date: datetime, output_path: Path) -> None:
             click.echo(f"Processing image position {col_idx+1},{row_idx+1} of {tiles_wide},{tiles_high} (tile coords: col={tile_col}, row={tile_row})")
             
             # Download base tile
-            base_tile = download_base_tile(tile_col, tile_row, DEFAULT_ZOOM)
+            base_tile = download_base_tile(tile_col, tile_row, zoom)
             
             # Download fire overlay
-            bbox = tile_to_epsg3978_bbox(tile_col, tile_row, DEFAULT_ZOOM)
+            bbox = tile_to_epsg3978_bbox(tile_col, tile_row, zoom)
             fire_overlay = download_fire_overlay(bbox, date_str)
             
             # Composite base and overlay
@@ -223,22 +224,40 @@ def create_wildfire_map(date: datetime, output_path: Path) -> None:
 @click.command()
 @click.argument('date', callback=lambda ctx, param, value: validate_date(value))
 @click.option('--output', '-o', type=click.Path(), help='Output filename (default: wildfire-YYYY-MM-DD.png)')
-def main(date: datetime, output: str = None) -> None:
+@click.option('--zoom', '-z', type=int, default=DEFAULT_ZOOM, help=f'Zoom level (0-{len(RESOLUTIONS)-1}, default: {DEFAULT_ZOOM})')
+@click.option('--width', '-w', type=int, default=MAP_SIZE[0], help=f'Map width in tiles (default: {MAP_SIZE[0]})')
+@click.option('--height', '-h', type=int, default=MAP_SIZE[1], help=f'Map height in tiles (default: {MAP_SIZE[1]})')
+def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1]) -> None:
     """
     Download Canadian wildfire map for a given date.
     
     DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
     
-    Example:
+    Examples:
         wildfire 2025-08-04
+        wildfire 2025-08-04 --zoom 5 --width 5 --height 4
+        wildfire 2025-08-04 -z 3 -w 6 -h 3 -o custom-map.png
     """
+    # Validate parameters
+    if zoom < 0 or zoom >= len(RESOLUTIONS):
+        click.echo(f"Error: Zoom level must be between 0 and {len(RESOLUTIONS)-1}, got {zoom}", err=True)
+        sys.exit(1)
+    
+    if width < 1 or width > 10:
+        click.echo(f"Error: Width must be between 1 and 10 tiles, got {width}", err=True)
+        sys.exit(1)
+    
+    if height < 1 or height > 10:
+        click.echo(f"Error: Height must be between 1 and 10 tiles, got {height}", err=True)
+        sys.exit(1)
+    
     if output is None:
         output = f"wildfire-{date.strftime('%Y-%m-%d')}.png"
     
     output_path = Path(output)
     
     try:
-        create_wildfire_map(date, output_path)
+        create_wildfire_map(date, output_path, zoom, (width, height))
     except KeyboardInterrupt:
         click.echo("\nOperation cancelled by user", err=True)
         sys.exit(1)
