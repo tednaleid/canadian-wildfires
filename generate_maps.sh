@@ -43,7 +43,7 @@ if [[ ! "$END_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
     exit 1
 fi
 
-# Convert dates to seconds since epoch for comparison (macOS compatible)
+# Convert dates to seconds since epoch for comparison
 start_epoch=$(date -j -f "%Y-%m-%d" "$START_DATE" "+%s")
 end_epoch=$(date -j -f "%Y-%m-%d" "$END_DATE" "+%s")
 
@@ -53,7 +53,7 @@ if [ "$end_epoch" -lt "$start_epoch" ]; then
     exit 1
 fi
 
-# Calculate number of days (inclusive)
+# Calculate number of days between start and end dates (inclusive)
 NUM_DAYS=$(( (end_epoch - start_epoch) / 86400 + 1 ))
 
 # Create output directory if it doesn't exist
@@ -70,7 +70,7 @@ echo ""
 
 # Generate maps for each day
 for (( i=0; i<NUM_DAYS; i++ )); do
-    # Calculate current date (macOS compatible)
+    # Calculate current date by adding i days to start date
     current_date=$(date -j -v+${i}d -f "%Y-%m-%d" "$START_DATE" "+%Y-%m-%d")
     
     # Progress indicator
