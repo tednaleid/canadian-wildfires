@@ -1,6 +1,9 @@
 # Generated wildfire map images
 *.png
 
+# Tile cache directory
+tile_cache/
+
 # Python cache files
 __pycache__/
 *.pyc

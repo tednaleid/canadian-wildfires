@@ -22,6 +22,8 @@ from PIL import Image, ImageDraw
 from io import BytesIO
 from urllib.parse import urlencode
 import time
+import os
+import hashlib
 
 # CWFIS API endpoints - corrected URL from JavaScript source
 BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
@@ -33,6 +35,10 @@ DEFAULT_ZOOM = 4  # Higher zoom for more detail (was 200km scale, now ~115km sca
 DEFAULT_CENTER = (-200000, 1200000)  # Move west from 200000 to -200000
 TILE_SIZE = 256
 MAP_SIZE = (4, 3)  # 4 wide x 3 high - add western column for Alberta/Pacific coast
+
+# Tile caching configuration
+CACHE_DIR = Path("tile_cache")
+TILE_CACHE_VERSION = "v1"  # Increment if cache format changes
 
 # WMTS tile grid parameters from JavaScript source (exact values)
 TILE_ORIGIN = (-34655800, 39310000)  # origin: [-3.46558E7, 3.931E7]
@@ -63,6 +69,28 @@ def validate_date(date_str: str) -> datetime:
         return datetime.strptime(date_str, "%Y-%m-%d")
     except ValueError:
         raise click.BadParameter(f"Date must be in YYYY-MM-DD format, got: {date_str}")
+
+def get_tile_cache_path(tile_col: int, tile_row: int, zoom: int) -> Path:
+    """Get the cache file path for a base map tile."""
+    cache_subdir = CACHE_DIR / TILE_CACHE_VERSION / f"zoom_{zoom:02d}"
+    cache_subdir.mkdir(parents=True, exist_ok=True)
+    return cache_subdir / f"tile_{tile_col:04d}_{tile_row:04d}.jpg"
+
+def is_tile_cached(tile_col: int, tile_row: int, zoom: int) -> bool:
+    """Check if a base map tile is already cached."""
+    cache_path = get_tile_cache_path(tile_col, tile_row, zoom)
+    return cache_path.exists() and cache_path.stat().st_size > 0
+
+def load_cached_tile(tile_col: int, tile_row: int, zoom: int) -> Image.Image:
+    """Load a cached base map tile."""
+    cache_path = get_tile_cache_path(tile_col, tile_row, zoom)
+    return Image.open(cache_path)
+
+def save_tile_to_cache(tile_col: int, tile_row: int, zoom: int, image_data: bytes) -> None:
+    """Save a base map tile to cache."""
+    cache_path = get_tile_cache_path(tile_col, tile_row, zoom)
+    with open(cache_path, 'wb') as f:
+        f.write(image_data)
 
 def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
     """Convert EPSG:3978 coordinates to tile coordinates using WMTS grid calculation."""
@@ -99,7 +127,13 @@ def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[floa
     return min_x, min_y, max_x, max_y
 
 def download_base_tile(tile_col: int, tile_row: int, zoom: int) -> Image.Image:
-    """Download a base map tile."""
+    """Download a base map tile, using cache if available."""
+    # Check cache first
+    if is_tile_cached(tile_col, tile_row, zoom):
+        click.echo(f"Using cached base tile {tile_col},{tile_row}")
+        return load_cached_tile(tile_col, tile_row, zoom)
+    
+    # Download from server
     url = f"{BASE_MAP_URL}/{zoom}/{tile_row}/{tile_col}.jpg"
     
     try:
@@ -111,8 +145,11 @@ def download_base_tile(tile_col: int, tile_row: int, zoom: int) -> Image.Image:
         if blank_tile:
             click.echo(f"Warning: Tile {tile_col},{tile_row} is blank (outside coverage area)", err=True)
         
+        # Save to cache before processing
+        save_tile_to_cache(tile_col, tile_row, zoom, response.content)
+        
         image = Image.open(BytesIO(response.content))
-        click.echo(f"Downloaded base tile {tile_col},{tile_row}: {len(response.content)} bytes, format: {image.format}")
+        click.echo(f"Downloaded and cached base tile {tile_col},{tile_row}: {len(response.content)} bytes, format: {image.format}")
         return image
     except Exception as e:
         click.echo(f"Warning: Failed to download base tile {tile_col},{tile_row}: {e}", err=True)
