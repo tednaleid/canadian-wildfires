@@ -18,7 +18,7 @@ import aiohttp
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from dataclasses import dataclass
 
@@ -178,6 +178,58 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
     empty_image = Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
     return tile_info, empty_image
 
+def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
+    """Add date overlay to the upper right corner of the image."""
+    # Create a copy to avoid modifying the original
+    img_with_overlay = image.copy()
+    draw = ImageDraw.Draw(img_with_overlay)
+    
+    # Format the date
+    date_text = date.strftime("%Y-%m-%d")
+    
+    # Try to use a system font, fall back to default if not available
+    try:
+        # Try common system fonts (adjust path as needed)
+        font_size = 24
+        try:
+            # macOS system font
+            font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", font_size)
+        except (OSError, IOError):
+            try:
+                # Linux system font
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+            except (OSError, IOError):
+                # Windows system font
+                font = ImageFont.truetype("arial.ttf", font_size)
+    except (OSError, IOError):
+        # Fall back to default font if no system fonts available
+        font = ImageFont.load_default()
+    
+    # Get text dimensions
+    bbox = draw.textbbox((0, 0), date_text, font=font)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+    
+    # Position in upper right corner with some margin
+    margin = 15
+    x = img_with_overlay.width - text_width - margin
+    y = margin
+    
+    # Draw semi-transparent background rectangle
+    bg_padding = 8
+    bg_rect = [
+        x - bg_padding,
+        y - bg_padding, 
+        x + text_width + bg_padding,
+        y + text_height + bg_padding
+    ]
+    draw.rectangle(bg_rect, fill=(0, 0, 0, 180))  # Semi-transparent black
+    
+    # Draw the date text in white
+    draw.text((x, y), date_text, fill=(255, 255, 255), font=font)
+    
+    return img_with_overlay
+
 def epsg3978_to_tile(x: float, y: float, zoom: int) -> tuple[int, int]:
     """Convert EPSG:3978 coordinates to tile coordinates using WMTS grid calculation."""
     if zoom >= len(RESOLUTIONS):
@@ -213,7 +265,7 @@ def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[floa
     return min_x, min_y, max_x, max_y
 
 
-async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE) -> None:
+async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE, date_overlay: bool = True) -> None:
     """Create a wildfire map for the given date using async downloads."""
     date_str = date.strftime("%Y-%m-%d")
     click.echo(f"Creating wildfire map for {date_str}...")
@@ -290,6 +342,11 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
         # Place in final image
         final_image.paste(composite, (tile_info.paste_x, tile_info.paste_y))
     
+    # Add date overlay if requested
+    if date_overlay:
+        click.echo("Adding date overlay...")
+        final_image = add_date_overlay(final_image, date)
+    
     # Save final image
     final_image.save(output_path, 'PNG', optimize=True)
     click.echo(f"Wildfire map saved to: {output_path}")
@@ -302,15 +359,17 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
 @click.option('--zoom', '-z', type=int, default=DEFAULT_ZOOM, help=f'Zoom level (0-{len(RESOLUTIONS)-1}, default: {DEFAULT_ZOOM})')
 @click.option('--width', '-w', type=int, default=MAP_SIZE[0], help=f'Map width in tiles (default: {MAP_SIZE[0]})')
 @click.option('--height', '-h', type=int, default=MAP_SIZE[1], help=f'Map height in tiles (default: {MAP_SIZE[1]})')
-def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1]) -> None:
+@click.option('--date-overlay/--no-date-overlay', default=True, help='Add date overlay to upper right corner (default: enabled)')
+def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: int = MAP_SIZE[0], height: int = MAP_SIZE[1], date_overlay: bool = True) -> None:
     """
     Download Canadian wildfire map for a given date using async downloads with connection pooling.
     
     DATE: Date in YYYY-MM-DD format (e.g., 2025-08-04)
     
     Examples:
-        wildfire 2025-08-04                           # Default: zoom 4, 4x3 tiles
+        wildfire 2025-08-04                           # Default: zoom 4, 4x3 tiles, with date overlay
         wildfire 2025-08-04 -z 5 -w 5 -h 4           # Custom zoom and size
+        wildfire 2025-08-04 --no-date-overlay         # Disable date overlay
         wildfire 2025-08-04 -z 3 -w 6 -h 3 -o big.png # Custom output filename
     """
     # Validate parameters
@@ -332,7 +391,7 @@ def main(date: datetime, output: str = None, zoom: int = DEFAULT_ZOOM, width: in
     output_path = Path(output)
     
     try:
-        asyncio.run(create_wildfire_map(date, output_path, zoom, (width, height)))
+        asyncio.run(create_wildfire_map(date, output_path, zoom, (width, height), date_overlay))
     except KeyboardInterrupt:
         click.echo("\nOperation cancelled by user", err=True)
         sys.exit(1)
