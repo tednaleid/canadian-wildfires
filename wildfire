@@ -190,43 +190,40 @@ def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
     # Try to use a system font, fall back to default if not available
     try:
         # Try common system fonts (adjust path as needed)
-        font_size = 24
+        font_size = 28  # Slightly larger for better visibility
         try:
-            # macOS system font
-            font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", font_size)
+            # macOS system font - use bold for better visibility
+            font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
         except (OSError, IOError):
             try:
-                # Linux system font
-                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                # macOS fallback
+                font = ImageFont.truetype("/System/Library/Fonts/Arial.ttf", font_size)
             except (OSError, IOError):
-                # Windows system font
-                font = ImageFont.truetype("arial.ttf", font_size)
+                try:
+                    # Linux system font
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                except (OSError, IOError):
+                    # Windows system font
+                    font = ImageFont.truetype("arial.ttf", font_size)
     except (OSError, IOError):
         # Fall back to default font if no system fonts available
         font = ImageFont.load_default()
     
-    # Get text dimensions
+    # Get text dimensions for proper positioning
     bbox = draw.textbbox((0, 0), date_text, font=font)
     text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
     
-    # Position in upper right corner with some margin
+    # Position in upper right corner with margin
     margin = 15
     x = img_with_overlay.width - text_width - margin
     y = margin
     
-    # Draw semi-transparent background rectangle
-    bg_padding = 8
-    bg_rect = [
-        x - bg_padding,
-        y - bg_padding, 
-        x + text_width + bg_padding,
-        y + text_height + bg_padding
-    ]
-    draw.rectangle(bg_rect, fill=(0, 0, 0, 180))  # Semi-transparent black
-    
-    # Draw the date text in white
-    draw.text((x, y), date_text, fill=(255, 255, 255), font=font)
+    # Draw red text with slight shadow for better contrast
+    shadow_offset = 2
+    # Draw shadow (dark red)
+    draw.text((x + shadow_offset, y + shadow_offset), date_text, fill=(100, 0, 0), font=font)
+    # Draw main text (bright red)
+    draw.text((x, y), date_text, fill=(255, 50, 50), font=font)
     
     return img_with_overlay
 
