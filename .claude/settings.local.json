@@ -12,7 +12,8 @@
       "Bash(chmod:*)",
       "Bash(./wildfire:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(./generate_maps.sh:*)"
     ],
     "deny": []
   }
