@@ -14,7 +14,7 @@ ex:
 ./wildfire "2025-08-04" 
 ```
 
-Creates this image showing fire perimeters from August 4th, 2025:
+Creates this image showing fire perimeters on August 4th, 2025:
 
 ![Canadian Wildfire Perimeters on August 4th, 2025](examples/wildfire-2025-08-04-z6-10x4.png)
 
@@ -37,6 +37,17 @@ We can compare that to data from the decade starting in 2003 (the first year per
 ![Canadian Wildfire Perimeters on August 4th, 2003 through 2012](examples/wildfire-2003-2012-08-04-z6-10x4.png)
 
 
+And a full composite image of the last 22 years of fire perimeter data for August 4th:
+
+```bash
+./wildfire "2003-08-04" "2025-08-04"
+```
+
+![Canadian Wildfire Perimeters on August 4th, 2003 through 2025](examples/wildfire-2003-2025-08-04-z6-10x4.png)
+
+
+### Images for multiple days
+
 If we give it a start date month-day that is prior to the end date month-day, it will create a composite image for every month-day.  So:
 
 ```bash
@@ -53,18 +64,19 @@ ffmpeg -framerate 3 -pattern_type glob -i "wildfire-*.png" \
     "../$(basename "$PWD")-wildfires.mp4"
 ```
 
-This created the following mp4s that show how wildfires have evolved over time. The earliest perimiter data on the website is from 2003.  
+This created the following mp4s that show how wildfires have evolved over time. The earliest perimeter data on the website is from 2003.  
 
 Here's the 2003-2012 decade of wildfire starting on April 1st:
 
-![2003-2012 Canadian wildfires](examples/2003-2012-wildfires.mp4)
+https://github.com/user-attachments/assets/a59f341e-9059-4ba2-b197-f33d29cfa61f
 
 Compare that to the last decade of wildfires, 2016-2025:
 
-![2016-2025 Canadian wildfires](examples/2016-2025-wildfires.mp4)
+https://github.com/user-attachments/assets/5f3bd31b-c505-4d4c-9e6e-537e1109ac93
+
 
 (This was created on August 5th, 2025, so you can see the 2025 data drop off)
 
 And here's the last 22 years of Canadian wildfires in a single animation:
 
-![2003-2025 Canadian wildfires](examples/2003-2025-wildfires.mp4)
+https://github.com/user-attachments/assets/54f7afe6-6a89-4bc7-8aa2-721b5bdcad76
