@@ -29,10 +29,10 @@ BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT
 FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
 
 # Default map configuration
-DEFAULT_ZOOM = 4  # Zoom level 4 provides ~115km scale
+DEFAULT_ZOOM = 6  # Zoom level 4 provides ~115km scale
 DEFAULT_CENTER = (-200000, 600000)  # Center focused on Canadian landmass
 TILE_SIZE = 256
-MAP_SIZE = (4, 3)  # 4 tiles wide x 3 tiles high for optimal coverage
+MAP_SIZE = (10, 4)  # 10 tiles wide x 4 tiles high for optimal coverage
 
 # Tile caching configuration
 CACHE_DIR = Path("tile_cache")
