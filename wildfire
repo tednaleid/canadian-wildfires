@@ -160,7 +160,17 @@ def colorize_fire_overlay(image: Image.Image, year: int, min_year: int, max_year
         # Multiple years - gradient from grey to red
         year_range = max_year - min_year
         year_position = year - min_year
-        factor = year_position / year_range
+        
+        if year == max_year:
+            # Current year - make it pop with bright red
+            factor = 1.0
+        else:
+            # Previous years - use non-linear gradient that stays more grey
+            # Use a power function to keep values lower (more grey) for most of the range
+            linear_factor = year_position / year_range
+            # Cube the factor to make it grow slowly at first, then faster near the end
+            # This keeps older years more grey
+            factor = linear_factor ** 3 * 0.7  # Max out at 0.7 for non-current years
     
     # Create new color
     # Grey: RGB(128, 128, 128) to Red: RGB(255, 0, 0)
@@ -284,14 +294,6 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
     """Add date overlay to the upper right corner of the image."""
     # Create a copy to avoid modifying the original
     img_with_overlay = image.copy()
-    draw = ImageDraw.Draw(img_with_overlay)
-    
-    # Format the date
-    if year_range:
-        start_year, end_year = year_range
-        date_text = f"{start_year}-{end_year} {date.strftime('%m-%d')}"
-    else:
-        date_text = date.strftime("%Y-%m-%d")
     
     # Try to use a system font, fall back to default if not available
     try:
@@ -315,26 +317,100 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         # Fall back to default font if no system fonts available
         font = ImageFont.load_default()
     
-    # Get text dimensions for proper positioning
-    bbox = draw.textbbox((0, 0), date_text, font=font)
-    text_width = bbox[2] - bbox[0]
-    
     # Position in upper right corner with margin
     margin = 15
-    x = img_with_overlay.width - text_width - margin
     y = margin
     
-    # Draw red text with white outline for better contrast
-    outline_width = 2
-    
-    # Draw outline by drawing the text in white at multiple positions around the main position
-    for offset_x in range(-outline_width, outline_width + 1):
-        for offset_y in range(-outline_width, outline_width + 1):
-            if offset_x != 0 or offset_y != 0:  # Skip the center position
-                draw.text((x + offset_x, y + offset_y), date_text, fill=(255, 255, 255), font=font)
-    
-    # Draw main text (bright red) on top
-    draw.text((x, y), date_text, fill=(255, 50, 50), font=font)
+    if year_range:
+        # For multi-year overlays, create color-coded year range
+        start_year, end_year = year_range
+        month_day = date.strftime('%m-%d')
+        
+        # Create a new image with RGBA mode for transparency support
+        overlay_img = Image.new('RGBA', img_with_overlay.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay_img)
+        
+        # Calculate positions for each part
+        start_year_text = str(start_year)
+        end_year_text = str(end_year)
+        dash_text = "-"
+        
+        # Get text widths
+        start_bbox = draw.textbbox((0, 0), start_year_text, font=font)
+        dash_bbox = draw.textbbox((0, 0), dash_text, font=font)
+        end_bbox = draw.textbbox((0, 0), end_year_text, font=font)
+        month_bbox = draw.textbbox((0, 0), " " + month_day, font=font)
+        
+        total_width = (start_bbox[2] - start_bbox[0]) + (dash_bbox[2] - dash_bbox[0]) + \
+                      (end_bbox[2] - end_bbox[0]) + (month_bbox[2] - month_bbox[0])
+        
+        x = img_with_overlay.width - total_width - margin
+        
+        # Draw start year (grey with black outline)
+        current_x = x
+        # Black outline
+        for offset_x in range(-2, 3):
+            for offset_y in range(-2, 3):
+                if offset_x != 0 or offset_y != 0:
+                    draw.text((current_x + offset_x, y + offset_y), start_year_text, 
+                             fill=(0, 0, 0, 200), font=font)
+        # Grey text (semi-transparent)
+        draw.text((current_x, y), start_year_text, fill=(128, 128, 128, 180), font=font)
+        current_x += start_bbox[2] - start_bbox[0]
+        
+        # Draw dash (intermediate red with dark outline)
+        # Dark outline
+        for offset_x in range(-2, 3):
+            for offset_y in range(-2, 3):
+                if offset_x != 0 or offset_y != 0:
+                    draw.text((current_x + offset_x, y + offset_y), dash_text, 
+                             fill=(64, 0, 0, 200), font=font)  # Darker outline
+        # Intermediate red color (between grey and bright red)
+        draw.text((current_x, y), dash_text, fill=(192, 64, 64, 190), font=font)
+        current_x += dash_bbox[2] - dash_bbox[0]
+        
+        # Draw end year (red with dark red outline)
+        # Dark red outline
+        for offset_x in range(-2, 3):
+            for offset_y in range(-2, 3):
+                if offset_x != 0 or offset_y != 0:
+                    draw.text((current_x + offset_x, y + offset_y), end_year_text, 
+                             fill=(139, 0, 0, 220), font=font)  # Dark red
+        # Red text (semi-transparent)
+        draw.text((current_x, y), end_year_text, fill=(255, 50, 50, 200), font=font)
+        current_x += end_bbox[2] - end_bbox[0]
+        
+        # Draw month-day (grey like start year)
+        # Black outline
+        for offset_x in range(-2, 3):
+            for offset_y in range(-2, 3):
+                if offset_x != 0 or offset_y != 0:
+                    draw.text((current_x + offset_x, y + offset_y), " " + month_day, 
+                             fill=(0, 0, 0, 200), font=font)
+        # Grey text
+        draw.text((current_x, y), " " + month_day, fill=(128, 128, 128, 180), font=font)
+        
+        # Composite the overlay onto the main image
+        img_with_overlay = Image.alpha_composite(img_with_overlay.convert('RGBA'), overlay_img).convert('RGB')
+        
+    else:
+        # Single year - use original red text with white outline
+        draw = ImageDraw.Draw(img_with_overlay)
+        date_text = date.strftime("%Y-%m-%d")
+        
+        # Get text dimensions
+        bbox = draw.textbbox((0, 0), date_text, font=font)
+        text_width = bbox[2] - bbox[0]
+        x = img_with_overlay.width - text_width - margin
+        
+        # Draw white outline
+        for offset_x in range(-2, 3):
+            for offset_y in range(-2, 3):
+                if offset_x != 0 or offset_y != 0:
+                    draw.text((x + offset_x, y + offset_y), date_text, fill=(255, 255, 255), font=font)
+        
+        # Draw main text (bright red) on top
+        draw.text((x, y), date_text, fill=(255, 50, 50), font=font)
     
     return img_with_overlay
 
