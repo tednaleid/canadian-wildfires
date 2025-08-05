@@ -348,23 +348,23 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         
         # Draw start year (grey with black outline)
         current_x = x
-        # Black outline
+        # Black outline (less dark)
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), start_year_text, 
-                             fill=(0, 0, 0, 200), font=font)
+                             fill=(0, 0, 0, 120), font=font)
         # Grey text (semi-transparent)
         draw.text((current_x, y), start_year_text, fill=(128, 128, 128, 180), font=font)
         current_x += start_bbox[2] - start_bbox[0]
         
         # Draw dash (intermediate red with dark outline)
-        # Dark outline
+        # Dark outline (less dark)
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), dash_text, 
-                             fill=(64, 0, 0, 200), font=font)  # Darker outline
+                             fill=(64, 0, 0, 130), font=font)  # Less dark outline
         # Intermediate red color (between grey and bright red)
         draw.text((current_x, y), dash_text, fill=(192, 64, 64, 190), font=font)
         current_x += dash_bbox[2] - dash_bbox[0]
@@ -381,12 +381,12 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         current_x += end_bbox[2] - end_bbox[0]
         
         # Draw month-day (grey like start year)
-        # Black outline
+        # Black outline (less dark)
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), " " + month_day, 
-                             fill=(0, 0, 0, 200), font=font)
+                             fill=(0, 0, 0, 120), font=font)
         # Grey text
         draw.text((current_x, y), " " + month_day, fill=(128, 128, 128, 180), font=font)
         
