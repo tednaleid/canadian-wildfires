@@ -275,10 +275,8 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
         click.echo(f"Using cached fire overlay {tile_info.col},{tile_info.row} for {date.strftime('%Y-%m-%d')}")
         image = load_cached_fire(tile_info.col, tile_info.row, tile_info.zoom, date)
         
-        # Apply year-based coloring if year_range is provided
-        if year_range:
-            min_year, max_year = year_range
-            image = colorize_fire_overlay(image, date.year, min_year, max_year)
+        # Apply year-based coloring using the fixed gradient system
+        image = colorize_fire_overlay(image, date.year)
         
         return tile_info, image
     
@@ -316,10 +314,8 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
             else:
                 click.echo(f"Downloaded and cached empty fire overlay for tile {tile_info.col},{tile_info.row}")
             
-            # Apply year-based coloring if year_range is provided
-            if year_range:
-                min_year, max_year = year_range
-                image = colorize_fire_overlay(image, date.year, min_year, max_year)
+            # Apply year-based coloring using the fixed gradient system
+            image = colorize_fire_overlay(image, date.year)
             
             return tile_info, image
             
@@ -453,23 +449,27 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         img_with_overlay = Image.alpha_composite(img_with_overlay.convert('RGBA'), overlay_img).convert('RGB')
         
     else:
-        # Single year - use original red text with white outline
+        # Single year - use gradient color based on year
         draw = ImageDraw.Draw(img_with_overlay)
         date_text = date.strftime("%Y-%m-%d")
+        
+        # Get color for this year using the gradient system
+        year_color = get_year_color(date.year)
         
         # Get text dimensions
         bbox = draw.textbbox((0, 0), date_text, font=font)
         text_width = bbox[2] - bbox[0]
         x = img_with_overlay.width - text_width - margin
         
-        # Draw white outline
+        # Draw outline using a darker version of the year color
+        outline_color = (max(0, year_color[0] - 35), max(0, year_color[1]), max(0, year_color[2]))
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
-                    draw.text((x + offset_x, y + offset_y), date_text, fill=(255, 255, 255), font=font)
+                    draw.text((x + offset_x, y + offset_y), date_text, fill=outline_color, font=font)
         
-        # Draw main text (bright red) on top
-        draw.text((x, y), date_text, fill=(255, 50, 50), font=font)
+        # Draw main text with gradient color
+        draw.text((x, y), date_text, fill=year_color, font=font)
     
     return img_with_overlay
 
