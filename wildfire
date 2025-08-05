@@ -536,6 +536,7 @@ def main(start_date: datetime, end_date: datetime = None, output: str = None, zo
     - Date overlay shows "2024-2025 08-01" format
     - Files named like "wildfire-2024-2025-08-01-z6-9x4.png"
     
+    \b
     Examples:
         wildfire 2025-08-04                           # Single date
         wildfire 2025-08-01 2025-08-04                # Date range (single year)
