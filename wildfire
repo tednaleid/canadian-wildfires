@@ -216,10 +216,16 @@ def get_year_color(year: int) -> tuple[int, int, int]:
         # Current/end year - bright red
         factor = 1.0
     else:
-        # Previous years - use non-linear gradient that stays more grey
-        linear_factor = year_position / year_range
-        # Cube the factor to make it grow slowly at first, then faster near the end
-        factor = linear_factor ** 3 * 0.7  # Max out at 0.7 for non-current years
+        # Linear gradient from 2003 to 2024, then jump to bright red for 2025
+        # Calculate linear factor from 2003 to 2024 (21 years)
+        linear_2024_range = 2024 - FIXED_START_YEAR  # 21 years
+        if year <= 2024:
+            linear_factor = year_position / linear_2024_range
+            # Scale to match the 2024 target factor (0.609 from previous cubic calculation)
+            factor = linear_factor * 0.609
+        else:
+            # This case shouldn't happen since we handle 2025 above, but safety fallback
+            factor = 0.609
     
     # Create color: Grey: RGB(128, 128, 128) to Red: RGB(255, 0, 0)
     red = int(128 + 127 * factor)  # 128 to 255
