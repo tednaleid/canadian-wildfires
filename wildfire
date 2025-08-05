@@ -28,13 +28,17 @@ FIRE_PERIMETER_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wms"
 
 # Default map configuration
 DEFAULT_ZOOM = 4  # Zoom level 4 provides ~115km scale
-DEFAULT_CENTER = (-200000, 1200000)  # Center focused on Canadian landmass
+DEFAULT_CENTER = (-200000, 600000)  # Center focused on Canadian landmass
 TILE_SIZE = 256
 MAP_SIZE = (4, 3)  # 4 tiles wide x 3 tiles high for optimal coverage
 
 # Tile caching configuration
 CACHE_DIR = Path("tile_cache")
 TILE_CACHE_VERSION = "v1"  # Increment if cache format changes
+
+# Fire overlay caching configuration
+FIRE_CACHE_DIR = Path("fire_cache")
+FIRE_CACHE_VERSION = "v1"  # Increment if cache format changes
 
 @dataclass
 class TileInfo:
@@ -99,6 +103,32 @@ def save_tile_to_cache(tile_col: int, tile_row: int, zoom: int, image_data: byte
     with open(cache_path, 'wb') as f:
         f.write(image_data)
 
+def get_fire_cache_path(tile_col: int, tile_row: int, zoom: int, date: datetime) -> Path:
+    """Get the cache file path for a fire overlay."""
+    # Organize by year/month for better file management
+    year_month = date.strftime("%Y/%m")
+    date_str = date.strftime("%Y-%m-%d")
+    
+    cache_subdir = FIRE_CACHE_DIR / FIRE_CACHE_VERSION / year_month / f"zoom_{zoom:02d}"
+    cache_subdir.mkdir(parents=True, exist_ok=True)
+    return cache_subdir / f"fire_{date_str}_tile_{tile_col:04d}_{tile_row:04d}.png"
+
+def is_fire_cached(tile_col: int, tile_row: int, zoom: int, date: datetime) -> bool:
+    """Check if a fire overlay is already cached."""
+    cache_path = get_fire_cache_path(tile_col, tile_row, zoom, date)
+    return cache_path.exists() and cache_path.stat().st_size > 0
+
+def load_cached_fire(tile_col: int, tile_row: int, zoom: int, date: datetime) -> Image.Image:
+    """Load a cached fire overlay."""
+    cache_path = get_fire_cache_path(tile_col, tile_row, zoom, date)
+    return Image.open(cache_path)
+
+def save_fire_to_cache(tile_col: int, tile_row: int, zoom: int, date: datetime, image_data: bytes) -> None:
+    """Save a fire overlay to cache."""
+    cache_path = get_fire_cache_path(tile_col, tile_row, zoom, date)
+    with open(cache_path, 'wb') as f:
+        f.write(image_data)
+
 async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: TileInfo) -> tuple[TileInfo, Image.Image]:
     """Download a base map tile with caching support."""
     # Check cache first
@@ -133,9 +163,17 @@ async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: Ti
         blank_image = Image.new('RGB', (TILE_SIZE, TILE_SIZE), color='lightgray')
         return tile_info, blank_image
 
-async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date_str: str) -> tuple[TileInfo, Image.Image]:
-    """Download fire perimeter overlay for a tile."""
+async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date: datetime) -> tuple[TileInfo, Image.Image]:
+    """Download fire perimeter overlay for a tile with caching support."""
+    # Check cache first
+    if is_fire_cached(tile_info.col, tile_info.row, tile_info.zoom, date):
+        click.echo(f"Using cached fire overlay {tile_info.col},{tile_info.row} for {date.strftime('%Y-%m-%d')}")
+        image = load_cached_fire(tile_info.col, tile_info.row, tile_info.zoom, date)
+        return tile_info, image
+    
+    # Download from server
     min_x, min_y, max_x, max_y = tile_info.bbox
+    date_str = date.strftime("%Y-%m-%d")
     
     params = {
         'SERVICE': 'WMS',
@@ -158,9 +196,14 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
             content = await response.read()
             image = Image.open(BytesIO(content))
             
+            # Save to cache (always cache, even empty responses to avoid repeat requests)
+            save_fire_to_cache(tile_info.col, tile_info.row, tile_info.zoom, date, content)
+            
             # Only show success message if we got actual fire data (not just empty transparent)
             if len(content) > 1000:  # More than just a small transparent PNG
-                click.echo(f"Downloaded fire overlay for tile {tile_info.col},{tile_info.row}: {len(content)} bytes")
+                click.echo(f"Downloaded and cached fire overlay for tile {tile_info.col},{tile_info.row}: {len(content)} bytes")
+            else:
+                click.echo(f"Downloaded and cached empty fire overlay for tile {tile_info.col},{tile_info.row}")
             
             return tile_info, image
             
@@ -189,7 +232,7 @@ def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
     # Try to use a system font, fall back to default if not available
     try:
         # Try common system fonts (adjust path as needed)
-        font_size = 28  # Slightly larger for better visibility
+        font_size = 96  
         try:
             # macOS system font - use bold for better visibility
             font = ImageFont.truetype("/System/Library/Fonts/Arial Bold.ttf", font_size)
@@ -321,7 +364,7 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
         
         # Download base tiles and fire overlays concurrently
         base_tasks = [download_base_tile_async(session, tile_info) for tile_info in tile_requests]
-        fire_tasks = [download_fire_overlay_async(session, tile_info, date_str) for tile_info in tile_requests]
+        fire_tasks = [download_fire_overlay_async(session, tile_info, date) for tile_info in tile_requests]
         
         # Wait for all downloads to complete (maintains order!)
         base_results = await asyncio.gather(*base_tasks)
