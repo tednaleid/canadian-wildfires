@@ -369,13 +369,13 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         draw.text((current_x, y), dash_text, fill=(192, 64, 64, 190), font=font)
         current_x += dash_bbox[2] - dash_bbox[0]
         
-        # Draw end year (red with dark red outline)
-        # Dark red outline
+        # Draw end year (red with bright red outline)
+        # Bright red outline (not quite #FF0000 but close)
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), end_year_text, 
-                             fill=(139, 0, 0, 220), font=font)  # Dark red
+                             fill=(220, 0, 0, 230), font=font)  # Bright red outline
         # Red text (semi-transparent)
         draw.text((current_x, y), end_year_text, fill=(255, 50, 50, 200), font=font)
         current_x += end_bbox[2] - end_bbox[0]
