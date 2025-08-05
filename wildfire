@@ -6,6 +6,7 @@
 #     "pillow", 
 #     "click",
 #     "pyproj",
+#     "numpy",
 # ]
 # ///
 
@@ -21,6 +22,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 from dataclasses import dataclass
+import numpy as np
 
 # CWFIS API endpoints
 BASE_MAP_URL = "https://geoappext.nrcan.gc.ca/arcgis/rest/services/BaseMaps/CBMT3978/MapServer/WMTS/tile/1.0.0/BaseMaps_CBMT3978/default/default028mm"
@@ -129,6 +131,53 @@ def save_fire_to_cache(tile_col: int, tile_row: int, zoom: int, date: datetime, 
     with open(cache_path, 'wb') as f:
         f.write(image_data)
 
+def colorize_fire_overlay(image: Image.Image, year: int, min_year: int, max_year: int) -> Image.Image:
+    """
+    Convert fire overlay from pink to a color based on year.
+    Older years are grey, newer years are progressively more red.
+    """
+    if image.mode != 'RGBA':
+        image = image.convert('RGBA')
+    
+    # Convert to numpy array for easier manipulation
+    data = np.array(image)
+    
+    # Extract alpha channel
+    alpha = data[:, :, 3]
+    
+    # Create mask for non-transparent pixels
+    mask = alpha > 0
+    
+    if not np.any(mask):
+        # No fire data in this image
+        return image
+    
+    # Calculate color based on year position
+    if min_year == max_year:
+        # Single year - use red
+        factor = 1.0
+    else:
+        # Multiple years - gradient from grey to red
+        year_range = max_year - min_year
+        year_position = year - min_year
+        factor = year_position / year_range
+    
+    # Create new color
+    # Grey: RGB(128, 128, 128) to Red: RGB(255, 0, 0)
+    # Interpolate between grey and red based on factor
+    red = int(128 + 127 * factor)  # 128 to 255
+    green = int(128 * (1 - factor))  # 128 to 0
+    blue = int(128 * (1 - factor))   # 128 to 0
+    
+    # Apply new color to non-transparent pixels
+    data[mask, 0] = red
+    data[mask, 1] = green
+    data[mask, 2] = blue
+    # Keep alpha channel unchanged
+    
+    # Convert back to PIL Image
+    return Image.fromarray(data)
+
 async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: TileInfo) -> tuple[TileInfo, Image.Image]:
     """Download a base map tile with caching support."""
     # Check cache first
@@ -163,12 +212,18 @@ async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: Ti
         blank_image = Image.new('RGB', (TILE_SIZE, TILE_SIZE), color='lightgray')
         return tile_info, blank_image
 
-async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date: datetime) -> tuple[TileInfo, Image.Image]:
-    """Download fire perimeter overlay for a tile with caching support."""
+async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info: TileInfo, date: datetime, year_range: tuple[int, int] = None) -> tuple[TileInfo, Image.Image]:
+    """Download fire perimeter overlay for a tile with caching support and optional year-based coloring."""
     # Check cache first
     if is_fire_cached(tile_info.col, tile_info.row, tile_info.zoom, date):
         click.echo(f"Using cached fire overlay {tile_info.col},{tile_info.row} for {date.strftime('%Y-%m-%d')}")
         image = load_cached_fire(tile_info.col, tile_info.row, tile_info.zoom, date)
+        
+        # Apply year-based coloring if year_range is provided
+        if year_range:
+            min_year, max_year = year_range
+            image = colorize_fire_overlay(image, date.year, min_year, max_year)
+        
         return tile_info, image
     
     # Download from server
@@ -204,6 +259,11 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
                 click.echo(f"Downloaded and cached fire overlay for tile {tile_info.col},{tile_info.row}: {len(content)} bytes")
             else:
                 click.echo(f"Downloaded and cached empty fire overlay for tile {tile_info.col},{tile_info.row}")
+            
+            # Apply year-based coloring if year_range is provided
+            if year_range:
+                min_year, max_year = year_range
+                image = colorize_fire_overlay(image, date.year, min_year, max_year)
             
             return tile_info, image
             
@@ -380,7 +440,7 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
             for year in range(start_year, end_year + 1):
                 # Create a date with the current year but same month/day
                 year_date = date.replace(year=year)
-                fire_tasks = [download_fire_overlay_async(session, tile_info, year_date) for tile_info in tile_requests]
+                fire_tasks = [download_fire_overlay_async(session, tile_info, year_date, year_range) for tile_info in tile_requests]
                 fire_results = await asyncio.gather(*fire_tasks)
                 all_fire_results.append(fire_results)
         else:
