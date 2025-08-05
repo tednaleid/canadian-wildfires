@@ -14,8 +14,15 @@ This command:
 
 does the same thing, but only for August 1st
 
+# TODO list
+
+- new ideas that we want to implement are in @TODO.md.  
+- You can edit this file to add new ideas.  
+- Ted should be consulted with any questions before implementation of these ideas.
+
 ## Git Workflow
 - As we make progress, commit changes to git with a descriptive message
 
 ## Comments
-Comments must be evergreen. They should talk about the current state of the code, not changes that were made from prior versions that are no longer present.
+- Comments must be evergreen. 
+  - They should talk about the current state of the code, not changes that were made from prior versions that are no longer present.

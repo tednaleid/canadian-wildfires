@@ -220,14 +220,18 @@ async def download_fire_overlay_async(session: aiohttp.ClientSession, tile_info:
     empty_image = Image.new('RGBA', (TILE_SIZE, TILE_SIZE), color=(0, 0, 0, 0))
     return tile_info, empty_image
 
-def add_date_overlay(image: Image.Image, date: datetime) -> Image.Image:
+def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, int] = None) -> Image.Image:
     """Add date overlay to the upper right corner of the image."""
     # Create a copy to avoid modifying the original
     img_with_overlay = image.copy()
     draw = ImageDraw.Draw(img_with_overlay)
     
     # Format the date
-    date_text = date.strftime("%Y-%m-%d")
+    if year_range:
+        start_year, end_year = year_range
+        date_text = f"{start_year}-{end_year} {date.strftime('%m-%d')}"
+    else:
+        date_text = date.strftime("%Y-%m-%d")
     
     # Try to use a system font, fall back to default if not available
     try:
@@ -309,9 +313,13 @@ def tile_to_epsg3978_bbox(tile_col: int, tile_row: int, zoom: int) -> tuple[floa
     return min_x, min_y, max_x, max_y
 
 
-async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE, date_overlay: bool = True) -> None:
+async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEFAULT_ZOOM, map_size: tuple[int, int] = MAP_SIZE, date_overlay: bool = True, year_range: tuple[int, int] = None) -> None:
     """Create a wildfire map for the given date."""
-    date_str = date.strftime("%Y-%m-%d")
+    if year_range:
+        start_year, end_year = year_range
+        date_str = f"{start_year}-{end_year} {date.strftime('%m-%d')}"
+    else:
+        date_str = date.strftime("%Y-%m-%d")
     click.echo(f"Creating wildfire map for {date_str}...")
     click.echo(f"Configuration: zoom={zoom}, map_size={map_size[0]}x{map_size[1]} tiles")
     
@@ -364,24 +372,41 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
         
         # Download base tiles and fire overlays concurrently
         base_tasks = [download_base_tile_async(session, tile_info) for tile_info in tile_requests]
-        fire_tasks = [download_fire_overlay_async(session, tile_info, date) for tile_info in tile_requests]
+        
+        # If year_range is specified, download fire overlays for all years
+        if year_range:
+            start_year, end_year = year_range
+            all_fire_results = []
+            for year in range(start_year, end_year + 1):
+                # Create a date with the current year but same month/day
+                year_date = date.replace(year=year)
+                fire_tasks = [download_fire_overlay_async(session, tile_info, year_date) for tile_info in tile_requests]
+                fire_results = await asyncio.gather(*fire_tasks)
+                all_fire_results.append(fire_results)
+        else:
+            fire_tasks = [download_fire_overlay_async(session, tile_info, date) for tile_info in tile_requests]
+            fire_results = await asyncio.gather(*fire_tasks)
+            all_fire_results = [fire_results]
         
         # Wait for all downloads to complete (maintains order!)
         base_results = await asyncio.gather(*base_tasks)
-        fire_results = await asyncio.gather(*fire_tasks)
     
     # Composite results in order
     click.echo("Compositing tiles...")
-    for (tile_info, base_tile), (_, fire_overlay) in zip(base_results, fire_results):
+    for idx, (tile_info, base_tile) in enumerate(base_results):
         click.echo(f"  -> Placing tile col={tile_info.col}, row={tile_info.row} at position {tile_info.paste_x},{tile_info.paste_y}")
         
-        # Composite base and overlay
-        if fire_overlay.mode == 'RGBA':
-            base_tile = base_tile.convert('RGBA')
-            composite = Image.alpha_composite(base_tile, fire_overlay)
-            composite = composite.convert('RGB')
-        else:
-            composite = base_tile
+        # Start with base tile
+        composite = base_tile.convert('RGBA')
+        
+        # Layer all fire overlays for this tile
+        for fire_results in all_fire_results:
+            _, fire_overlay = fire_results[idx]
+            if fire_overlay.mode == 'RGBA':
+                composite = Image.alpha_composite(composite, fire_overlay)
+        
+        # Convert back to RGB
+        composite = composite.convert('RGB')
         
         # Place in final image
         final_image.paste(composite, (tile_info.paste_x, tile_info.paste_y))
@@ -389,7 +414,7 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
     # Add date overlay if requested
     if date_overlay:
         click.echo("Adding date overlay...")
-        final_image = add_date_overlay(final_image, date)
+        final_image = add_date_overlay(final_image, date, year_range)
     
     # Save final image
     final_image.save(output_path, 'PNG', optimize=True)
@@ -399,6 +424,60 @@ async def create_wildfire_map(date: datetime, output_path: Path, zoom: int = DEF
 
 def generate_date_range(start_date: datetime, end_date: datetime, output_dir: Path, zoom: int, map_size: tuple[int, int], date_overlay: bool) -> None:
     """Generate wildfire maps for a date range sequentially."""
+    # Check if this is a multi-year span
+    if start_date.year != end_date.year:
+        # Multi-year mode: create daily images for the month/day range with all years overlaid
+        start_year = start_date.year
+        end_year = end_date.year
+        year_range = (start_year, end_year)
+        
+        # Use the start date's month/day to end date's month/day
+        # Create a reference year (use start year) to iterate through days
+        ref_start = start_date
+        ref_end = start_date.replace(month=end_date.month, day=end_date.day)
+        
+        # If ref_end is before ref_start, it means we're spanning across a year boundary
+        # In this case, we should only generate images for the days in the range
+        if ref_end < ref_start:
+            click.echo(f"Error: Multi-year mode requires end date to have same or later month/day as start date", err=True)
+            sys.exit(1)
+        
+        num_days = (ref_end - ref_start).days + 1
+        
+        click.echo("Generating multi-year wildfire maps...")
+        click.echo(f"Year range: {start_year} to {end_year}")
+        click.echo(f"Date range: {ref_start.strftime('%m-%d')} to {ref_end.strftime('%m-%d')}")
+        click.echo(f"Number of days: {num_days}")
+        click.echo(f"Output directory: {output_dir}")
+        click.echo("")
+        
+        # Generate maps for each day with all years overlaid
+        for i in range(num_days):
+            current_date = ref_start + timedelta(days=i)
+            progress = i + 1
+            
+            click.echo(f"[{progress}/{num_days}] Generating multi-year map for {current_date.strftime('%m-%d')}...")
+            
+            # Create filename with year range
+            filename = f"wildfire-{start_year}-{end_year}-{current_date.strftime('%m-%d')}-z{zoom}-{map_size[0]}x{map_size[1]}.png"
+            output_path = output_dir / filename
+            
+            try:
+                # Generate the map with year range
+                asyncio.run(create_wildfire_map(current_date, output_path, zoom, map_size, date_overlay, year_range))
+                click.echo(f"  ✓ Saved: {output_path}")
+                click.echo("")
+            except Exception as e:
+                click.echo(f"  ✗ Failed to generate map for {current_date.strftime('%m-%d')}: {e}", err=True)
+                sys.exit(1)
+        
+        click.echo(f"🎉 All {num_days} multi-year wildfire maps generated successfully!")
+        click.echo(f"Year range: {start_year} to {end_year}")
+        click.echo(f"Date range: {ref_start.strftime('%m-%d')} to {ref_end.strftime('%m-%d')}")
+        click.echo(f"Location: {output_dir}")
+        return
+    
+    # Single year mode (existing behavior)
     # Calculate number of days
     num_days = (end_date - start_date).days + 1
     
@@ -422,7 +501,7 @@ def generate_date_range(start_date: datetime, end_date: datetime, output_dir: Pa
         
         try:
             # Generate the map
-            asyncio.run(create_wildfire_map(current_date, output_path, zoom, map_size, date_overlay))
+            asyncio.run(create_wildfire_map(current_date, output_path, zoom, map_size, date_overlay, year_range=None))
             click.echo(f"  ✓ Saved: {output_path}")
             click.echo("")
         except Exception as e:
@@ -486,7 +565,7 @@ def main(start_date: datetime, end_date: datetime = None, output: str = None, zo
             # Single date mode
             filename = f"wildfire-{start_date.strftime('%Y-%m-%d')}-z{zoom}-{width}x{height}.png"
             output_path = output_dir / filename
-            asyncio.run(create_wildfire_map(start_date, output_path, zoom, (width, height), date_overlay))
+            asyncio.run(create_wildfire_map(start_date, output_path, zoom, (width, height), date_overlay, year_range=None))
         else:
             # Date range mode
             generate_date_range(start_date, end_date, output_dir, zoom, (width, height), date_overlay)
