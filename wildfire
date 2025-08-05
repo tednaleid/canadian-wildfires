@@ -131,10 +131,11 @@ def save_fire_to_cache(tile_col: int, tile_row: int, zoom: int, date: datetime, 
     with open(cache_path, 'wb') as f:
         f.write(image_data)
 
-def colorize_fire_overlay(image: Image.Image, year: int, min_year: int, max_year: int) -> Image.Image:
+def colorize_fire_overlay(image: Image.Image, year: int, min_year: int = None, max_year: int = None) -> Image.Image:
     """
     Convert fire overlay from pink to a color based on year.
     Older years are grey, newer years are progressively more red.
+    Uses fixed range 2003-2025 for consistent colors across different date ranges.
     """
     if image.mode != 'RGBA':
         image = image.convert('RGBA')
@@ -152,25 +153,30 @@ def colorize_fire_overlay(image: Image.Image, year: int, min_year: int, max_year
         # No fire data in this image
         return image
     
-    # Calculate color based on year position
-    if min_year == max_year:
-        # Single year - use red
+    # Calculate color based on year position using fixed range 2003-2025
+    FIXED_START_YEAR = 2003
+    FIXED_END_YEAR = 2025
+    
+    # Always use the fixed range for color calculation
+    year_range = FIXED_END_YEAR - FIXED_START_YEAR
+    year_position = year - FIXED_START_YEAR
+    
+    # Clamp year to our fixed range
+    if year < FIXED_START_YEAR:
+        year_position = 0
+    elif year > FIXED_END_YEAR:
+        year_position = year_range
+    
+    if year == FIXED_END_YEAR:
+        # Current/end year - make it pop with bright red
         factor = 1.0
     else:
-        # Multiple years - gradient from grey to red
-        year_range = max_year - min_year
-        year_position = year - min_year
-        
-        if year == max_year:
-            # Current year - make it pop with bright red
-            factor = 1.0
-        else:
-            # Previous years - use non-linear gradient that stays more grey
-            # Use a power function to keep values lower (more grey) for most of the range
-            linear_factor = year_position / year_range
-            # Cube the factor to make it grow slowly at first, then faster near the end
-            # This keeps older years more grey
-            factor = linear_factor ** 3 * 0.7  # Max out at 0.7 for non-current years
+        # Previous years - use non-linear gradient that stays more grey
+        # Use a power function to keep values lower (more grey) for most of the range
+        linear_factor = year_position / year_range
+        # Cube the factor to make it grow slowly at first, then faster near the end
+        # This keeps older years more grey
+        factor = linear_factor ** 3 * 0.7  # Max out at 0.7 for non-current years
     
     # Create new color
     # Grey: RGB(128, 128, 128) to Red: RGB(255, 0, 0)
@@ -187,6 +193,40 @@ def colorize_fire_overlay(image: Image.Image, year: int, min_year: int, max_year
     
     # Convert back to PIL Image
     return Image.fromarray(data)
+
+def get_year_color(year: int) -> tuple[int, int, int]:
+    """
+    Get RGB color for a year using the same gradient system as fire overlays.
+    Returns color values from grey (128,128,128) to red (255,0,0).
+    """
+    FIXED_START_YEAR = 2003
+    FIXED_END_YEAR = 2025
+    
+    # Always use the fixed range for color calculation
+    year_range = FIXED_END_YEAR - FIXED_START_YEAR
+    year_position = year - FIXED_START_YEAR
+    
+    # Clamp year to our fixed range
+    if year < FIXED_START_YEAR:
+        year_position = 0
+    elif year > FIXED_END_YEAR:
+        year_position = year_range
+    
+    if year == FIXED_END_YEAR:
+        # Current/end year - bright red
+        factor = 1.0
+    else:
+        # Previous years - use non-linear gradient that stays more grey
+        linear_factor = year_position / year_range
+        # Cube the factor to make it grow slowly at first, then faster near the end
+        factor = linear_factor ** 3 * 0.7  # Max out at 0.7 for non-current years
+    
+    # Create color: Grey: RGB(128, 128, 128) to Red: RGB(255, 0, 0)
+    red = int(128 + 127 * factor)  # 128 to 255
+    green = int(128 * (1 - factor))  # 128 to 0
+    blue = int(128 * (1 - factor))   # 128 to 0
+    
+    return (red, green, blue)
 
 async def download_base_tile_async(session: aiohttp.ClientSession, tile_info: TileInfo) -> tuple[TileInfo, Image.Image]:
     """Download a base map tile with caching support."""
@@ -346,49 +386,62 @@ def add_date_overlay(image: Image.Image, date: datetime, year_range: tuple[int, 
         
         x = img_with_overlay.width - total_width - margin
         
-        # Draw start year (grey with black outline)
+        # Get colors using the same gradient system as polygons
+        start_color = get_year_color(start_year)
+        end_color = get_year_color(end_year)
+        
+        # Calculate intermediate color for dash (average of start and end)
+        dash_color = (
+            (start_color[0] + end_color[0]) // 2,
+            (start_color[1] + end_color[1]) // 2,
+            (start_color[2] + end_color[2]) // 2
+        )
+        
+        # Draw start year
         current_x = x
-        # Black outline (less dark)
+        # Black outline
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), start_year_text, 
                              fill=(0, 0, 0, 120), font=font)
-        # Grey text (semi-transparent)
-        draw.text((current_x, y), start_year_text, fill=(128, 128, 128, 180), font=font)
+        # Year text with gradient color
+        draw.text((current_x, y), start_year_text, fill=(*start_color, 180), font=font)
         current_x += start_bbox[2] - start_bbox[0]
         
-        # Draw dash (intermediate red with halfway red outline)
-        # Halfway red outline (darker than dash interior, lighter than current year outline)
+        # Draw dash with intermediate color
+        # Outline using a darker version of the dash color
+        dash_outline = (max(0, dash_color[0] - 50), max(0, dash_color[1] - 20), max(0, dash_color[2] - 20))
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), dash_text, 
-                             fill=(140, 20, 20, 150), font=font)  # Halfway red outline
-        # Intermediate red color (between grey and bright red)
-        draw.text((current_x, y), dash_text, fill=(192, 64, 64, 190), font=font)
+                             fill=(*dash_outline, 150), font=font)
+        # Dash text with intermediate color
+        draw.text((current_x, y), dash_text, fill=(*dash_color, 190), font=font)
         current_x += dash_bbox[2] - dash_bbox[0]
         
-        # Draw end year (red with bright red outline)
-        # Bright red outline (not quite #FF0000 but close)
+        # Draw end year
+        # Outline using a darker version of the end color
+        end_outline = (max(0, end_color[0] - 35), max(0, end_color[1]), max(0, end_color[2]))
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), end_year_text, 
-                             fill=(220, 0, 0, 230), font=font)  # Bright red outline
-        # Red text (semi-transparent)
-        draw.text((current_x, y), end_year_text, fill=(255, 50, 50, 200), font=font)
+                             fill=(*end_outline, 230), font=font)
+        # Year text with gradient color
+        draw.text((current_x, y), end_year_text, fill=(*end_color, 200), font=font)
         current_x += end_bbox[2] - end_bbox[0]
         
-        # Draw month-day (grey like start year)
-        # Black outline (less dark)
+        # Draw month-day (use start year color since it represents the base date)
+        # Black outline
         for offset_x in range(-2, 3):
             for offset_y in range(-2, 3):
                 if offset_x != 0 or offset_y != 0:
                     draw.text((current_x + offset_x, y + offset_y), " " + month_day, 
                              fill=(0, 0, 0, 120), font=font)
-        # Grey text
-        draw.text((current_x, y), " " + month_day, fill=(128, 128, 128, 180), font=font)
+        # Month-day text with start year color
+        draw.text((current_x, y), " " + month_day, fill=(*start_color, 180), font=font)
         
         # Composite the overlay onto the main image
         img_with_overlay = Image.alpha_composite(img_with_overlay.convert('RGBA'), overlay_img).convert('RGB')
