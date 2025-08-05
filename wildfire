@@ -528,9 +528,18 @@ def main(start_date: datetime, end_date: datetime = None, output: str = None, zo
     START_DATE: Starting date in YYYY-MM-DD format (e.g., 2025-08-04)
     END_DATE: Optional ending date for range (e.g., 2025-08-07)
     
+    Multi-year overlay mode:
+    When START_DATE and END_DATE span different years, creates daily images
+    with fire polygons from all years overlaid. For example:
+    - wildfire 2024-08-01 2025-08-04 creates 4 images (Aug 1-4)
+    - Each image shows fires from both 2024 and 2025 for that day
+    - Date overlay shows "2024-2025 08-01" format
+    - Files named like "wildfire-2024-2025-08-01-z6-9x4.png"
+    
     Examples:
         wildfire 2025-08-04                           # Single date
-        wildfire 2025-08-01 2025-08-04                # Date range  
+        wildfire 2025-08-01 2025-08-04                # Date range (single year)
+        wildfire 2024-08-01 2025-08-04                # Multi-year overlay mode
         wildfire 2025-08-04 -z 5 -w 5 -h 4           # Custom zoom and size
         wildfire 2025-08-04 --no-date-overlay         # Disable date overlay
         wildfire 2025-04-01 2025-08-04 -o 2025        # Range to directory
