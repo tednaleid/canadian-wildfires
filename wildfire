@@ -525,9 +525,11 @@ def main(start_date: datetime, end_date: datetime = None, output: str = None, zo
     """
     Download Canadian wildfire map for a given date or date range.
     
+    \b
     START_DATE: Starting date in YYYY-MM-DD format (e.g., 2025-08-04)
     END_DATE: Optional ending date for range (e.g., 2025-08-07)
     
+    \b
     Multi-year overlay mode:
     When START_DATE and END_DATE span different years, creates daily images
     with fire polygons from all years overlaid. For example:
